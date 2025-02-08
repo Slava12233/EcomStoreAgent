@@ -122,13 +122,78 @@ A Telegram bot that enables natural language management of a WooCommerce WordPre
   - List products
   - Upload and manage product images
 
-### Current Task - Image Upload Debugging
-[X] Added test_image command for diagnostics
-[X] Verify MediaHandler initialization
-[X] Check temp directory permissions
-[X] Test WooCommerce connection
-[X] Debug image upload process
-[X] Successfully implemented image upload functionality
+### Current Task - Adding New Features
+[ ] ניהול הזמנות
+  - הצגת רשימת הזמנות
+  - הצגת פרטי הזמנה ספציפית
+  - עדכון סטטוס הזמנה
+  - חיפוש הזמנות לפי פרמטרים שונים
+
+[ ] ניהול לקוחות
+  - הצגת רשימת לקוחות
+  - הצגת פרטי לקוח
+  - עדכון פרטי לקוח
+  - חיפוש לקוחות
+
+[ ] ניהול קטגוריות
+  - יצירת קטגוריה חדשה
+  - עריכת קטגוריה קיימת
+  - מחיקת קטגוריה
+  - שיוך מוצרים לקטגוריות
+
+[ ] ניהול קופונים
+  - יצירת קופון חדש
+  - עריכת קופון קיים
+  - מחיקת קופון
+  - הצגת רשימת קופונים פעילים
+  - הגדרת תנאי שימוש לקופון
+
+[ ] ניהול מלאי מתקדם
+  - התראות על מלאי נמוך
+  - עדכון מלאי אוטומטי
+  - ניהול מלאי לפי מאפיינים (צבע, גודל וכו')
+
+[ ] ניהול שילוח
+  - הגדרת אזורי שילוח
+  - קביעת מחירי משלוח
+  - מעקב אחר משלוחים
+
+[ ] הגדרות חנות
+  - עדכון פרטי חנות בסיסיים
+  - הגדרות מיסים
+  - הגדרות תשלום
+
+### סדר פיתוח מוצע:
+1. ניהול קופונים (הכי דחוף ופשוט יחסית)
+2. ניהול הזמנות (חשוב למעקב ותפעול)
+3. ניהול קטגוריות (יעזור בארגון המוצרים)
+4. ניהול לקוחות
+5. ניהול מלאי מתקדם
+6. ניהול שילוח
+7. הגדרות חנות
+
+### שלב ראשון - פיתוח ניהול קופונים
+[X] הוספת מחלקה חדשה `coupon_handler.py`
+[X] הוספת פונקציות בסיסיות:
+  - create_coupon
+  - edit_coupon
+  - delete_coupon
+  - list_coupons
+  - get_coupon_details
+[X] אינטגרציה עם הבוט הראשי
+[X] הוספת דוגמאות שימוש בעברית
+[X] בדיקות ותיעוד
+
+### שלב הבא - פיתוח ניהול הזמנות
+[ ] הוספת מחלקה חדשה `order_handler.py`
+[ ] הוספת פונקציות בסיסיות:
+  - list_orders
+  - get_order_details
+  - update_order_status
+  - search_orders
+[ ] אינטגרציה עם הבוט הראשי
+[ ] הוספת דוגמאות שימוש בעברית
+[ ] בדיקות ותיעוד
 
 ### Core Technologies
 - Python 3.8+

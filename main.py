@@ -15,6 +15,7 @@ from langchain.agents import AgentType, Tool, initialize_agent
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import SystemMessage
 import re
+from coupon_handler import CouponHandler
 
 # Configure logging
 logging.basicConfig(
@@ -46,6 +47,7 @@ if not all([WP_URL, WP_USER, WP_PASSWORD, OPENAI_API_KEY]):
 
 # Initialize MediaHandler
 media_handler = MediaHandler(WP_URL, WP_USER, WP_PASSWORD)
+coupon_handler = CouponHandler(WP_URL)
 
 # Set timezone
 timezone = pytz.timezone('Asia/Jerusalem')
@@ -439,6 +441,139 @@ def delete_product_image(product_id: int, image_number: int) -> str:
         logger.error(f"Error deleting product image: {e}")
         return f"שגיאה במחיקת התמונה: {str(e)}"
 
+def create_coupon(coupon_info: str) -> str:
+    """Create a new coupon in WooCommerce"""
+    try:
+        # Parse coupon info from string format
+        # Expected format: code | type | amount | [description] | [expiry_date] | [min_amount] | [max_amount]
+        parts = coupon_info.strip().split("|")
+        if len(parts) < 3:
+            return "נדרש לפחות: קוד קופון | סוג הנחה | סכום הנחה"
+            
+        code = parts[0].strip()
+        discount_type = parts[1].strip().lower()
+        amount = float(parts[2].strip())
+        
+        # Optional parameters
+        description = parts[3].strip() if len(parts) > 3 else None
+        expiry_date = parts[4].strip() if len(parts) > 4 else None
+        min_amount = float(parts[5].strip()) if len(parts) > 5 else None
+        max_amount = float(parts[6].strip()) if len(parts) > 6 else None
+        
+        # Validate discount type
+        if discount_type not in ['percent', 'fixed_cart']:
+            return "סוג ההנחה חייב להיות 'percent' (אחוזים) או 'fixed_cart' (סכום קבוע)"
+        
+        # Create coupon
+        coupon = coupon_handler.create_coupon(
+            code=code,
+            discount_type=discount_type,
+            amount=amount,
+            description=description,
+            expiry_date=expiry_date,
+            min_amount=min_amount,
+            max_amount=max_amount
+        )
+        
+        return f"הקופון {code} נוצר בהצלחה!"
+        
+    except Exception as e:
+        logger.error(f"Error creating coupon: {e}")
+        return f"שגיאה ביצירת הקופון: {str(e)}"
+
+def list_coupons(_: str = "") -> str:
+    """Get list of all coupons"""
+    try:
+        coupons = coupon_handler.list_coupons()
+        
+        if not coupons:
+            return "אין קופונים פעילים בחנות"
+            
+        coupons_text = []
+        for c in coupons:
+            discount = f"{c['amount']}%" if c['discount_type'] == 'percent' else f"₪{c['amount']}"
+            expiry = f" (בתוקף עד {c['date_expires'][:10]})" if c.get('date_expires') else ""
+            coupons_text.append(f"- {c['code']}: {discount}{expiry}")
+            
+        return "הקופונים בחנות:\n" + "\n".join(coupons_text)
+        
+    except Exception as e:
+        logger.error(f"Error listing coupons: {e}")
+        return f"שגיאה בהצגת הקופונים: {str(e)}"
+
+def edit_coupon(coupon_info: str) -> str:
+    """Edit an existing coupon"""
+    try:
+        # Parse coupon info from string format
+        # Expected format: code | field | new_value
+        parts = coupon_info.strip().split("|")
+        if len(parts) != 3:
+            return "נדרש: קוד קופון | שדה לעריכה | ערך חדש"
+            
+        code = parts[0].strip()
+        field = parts[1].strip()
+        new_value = parts[2].strip()
+        
+        # Search for coupon by code
+        coupons = coupon_handler.search_coupons(code)
+        if not coupons:
+            return f"לא נמצא קופון עם הקוד {code}"
+            
+        coupon_id = coupons[0]["id"]
+        
+        # Map field names to API fields
+        field_mapping = {
+            "קוד": "code",
+            "סוג": "discount_type",
+            "סכום": "amount",
+            "תיאור": "description",
+            "תפוגה": "date_expires",
+            "מינימום": "minimum_amount",
+            "מקסימום": "maximum_amount"
+        }
+        
+        if field not in field_mapping:
+            return f"שדה לא חוקי. אפשרויות: {', '.join(field_mapping.keys())}"
+            
+        # Prepare update data
+        update_data = {
+            field_mapping[field]: new_value
+        }
+        
+        # Handle special cases
+        if field == "תפוגה":
+            update_data["date_expires"] = f"{new_value}T23:59:59"
+        elif field in ["מינימום", "מקסימום", "סכום"]:
+            update_data[field_mapping[field]] = float(new_value)
+        
+        # Update coupon
+        coupon_handler.edit_coupon(coupon_id, **update_data)
+        
+        return f"הקופון {code} עודכן בהצלחה"
+        
+    except Exception as e:
+        logger.error(f"Error editing coupon: {e}")
+        return f"שגיאה בעריכת הקופון: {str(e)}"
+
+def delete_coupon(code: str) -> str:
+    """Delete a coupon"""
+    try:
+        # Search for coupon by code
+        coupons = coupon_handler.search_coupons(code)
+        if not coupons:
+            return f"לא נמצא קופון עם הקוד {code}"
+            
+        coupon_id = coupons[0]["id"]
+        
+        # Delete coupon
+        coupon_handler.delete_coupon(coupon_id)
+        
+        return f"הקופון {code} נמחק בהצלחה"
+        
+    except Exception as e:
+        logger.error(f"Error deleting coupon: {e}")
+        return f"שגיאה במחיקת הקופון: {str(e)}"
+
 # Define tools
 tools = [
     Tool(
@@ -480,6 +615,26 @@ tools = [
         name="get_sales",
         func=get_sales,
         description="מציג את נתוני המכירות בחנות"
+    ),
+    Tool(
+        name="create_coupon",
+        func=create_coupon,
+        description="יוצר קופון חדש. פורמט: קוד | סוג (percent/fixed_cart) | סכום | [תיאור] | [תפוגה YYYY-MM-DD] | [מינימום] | [מקסימום]"
+    ),
+    Tool(
+        name="list_coupons",
+        func=list_coupons,
+        description="מציג את רשימת הקופונים בחנות"
+    ),
+    Tool(
+        name="edit_coupon",
+        func=edit_coupon,
+        description="עורך קופון קיים. פורמט: קוד | שדה | ערך חדש. שדות: קוד, סוג, סכום, תיאור, תפוגה, מינימום, מקסימום"
+    ),
+    Tool(
+        name="delete_coupon",
+        func=delete_coupon,
+        description="מוחק קופון מהחנות. מקבל את קוד הקופון"
     )
 ]
 
@@ -782,6 +937,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "- שנה את המחיר של מוצר\n"
         "- הורד/העלה מחיר באחוזים\n"
         "- הסר מבצע ממוצר\n\n"
+        "ניהול תמונות:\n"
+        "- שלח תמונה ובחר לאיזה מוצר לשייך אותה\n"
+        "- מחק תמונה ממוצר\n\n"
+        "ניהול קופונים:\n"
+        "- צור קופון חדש (קוד | סוג | סכום)\n"
+        "- הצג את כל הקופונים\n"
+        "- ערוך קופון קיים\n"
+        "- מחק קופון\n\n"
         "מידע:\n"
         "- הצג נתוני מכירות"
     )
