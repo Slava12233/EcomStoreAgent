@@ -1,0 +1,11 @@
+python-telegram-bot==21.10
+python-dotenv
+requests
+pytz
+openai
+langchain
+langchain-openai
+langchain-community
+langchain-core
+Pillow
+woocommerce==3.0.0
