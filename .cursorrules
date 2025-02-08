@@ -99,6 +99,10 @@ If needed, you can further use the `web_scraper.py` file to scrape the web page 
 - Add debug information to stderr while keeping the main output clean in stdout for better pipeline integration
 - When using seaborn styles in matplotlib, use 'seaborn-v0_8' instead of 'seaborn' as the style name due to recent seaborn version changes
 - Use 'gpt-4o' as the model name for OpenAI's GPT-4 with vision capabilities
+- Updated OpenAI model from 'gpt-4' to 'gpt-4-0125-preview' for better performance and capabilities in the Telegram bot
+- When handling WooCommerce API operations, use WC_CONSUMER_KEY and WC_CONSUMER_SECRET for product operations, and WP_USER/WP_PASSWORD for media uploads
+- Always include detailed logging in image upload operations for better debugging
+- Use separate authentication methods for WordPress media uploads (Basic Auth) and WooCommerce operations (API keys)
 
 # Scratchpad
 
@@ -116,6 +120,15 @@ A Telegram bot that enables natural language management of a WooCommerce WordPre
   - Update product prices
   - View sales data
   - List products
+  - Upload and manage product images
+
+### Current Task - Image Upload Debugging
+[X] Added test_image command for diagnostics
+[X] Verify MediaHandler initialization
+[X] Check temp directory permissions
+[X] Test WooCommerce connection
+[X] Debug image upload process
+[X] Successfully implemented image upload functionality
 
 ### Core Technologies
 - Python 3.8+
