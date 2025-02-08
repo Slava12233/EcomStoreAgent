@@ -22,11 +22,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.DEBUG,
     handlers=[
-        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.FileHandler('bot.log', mode='a', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Add initial log entry to verify logging is working
+logger.info("Bot logging initialized")
 
 # Load environment variables
 load_dotenv()
@@ -447,6 +450,9 @@ def create_coupon(coupon_info: str) -> str:
         # Parse coupon info from string format
         # Expected format: code | type | amount | [description] | [expiry_date] | [min_amount] | [max_amount]
         parts = coupon_info.strip().split("|")
+        logger.debug(f"Received coupon info: {coupon_info}")
+        logger.debug(f"Split into parts: {parts}")
+        
         if len(parts) < 3:
             return "נדרש לפחות: קוד קופון | סוג הנחה | סכום הנחה"
             
@@ -454,31 +460,46 @@ def create_coupon(coupon_info: str) -> str:
         discount_type = parts[1].strip().lower()
         amount = float(parts[2].strip())
         
-        # Optional parameters
+        # Optional parameters with detailed logging
         description = parts[3].strip() if len(parts) > 3 else None
         expiry_date = parts[4].strip() if len(parts) > 4 else None
         min_amount = float(parts[5].strip()) if len(parts) > 5 else None
         max_amount = float(parts[6].strip()) if len(parts) > 6 else None
         
+        logger.debug(f"Parsed values: code={code}, type={discount_type}, amount={amount}")
+        logger.debug(f"Optional values: description={description}, expiry={expiry_date}, min={min_amount}, max={max_amount}")
+        
         # Validate discount type
         if discount_type not in ['percent', 'fixed_cart']:
+            logger.error(f"Invalid discount type: {discount_type}")
             return "סוג ההנחה חייב להיות 'percent' (אחוזים) או 'fixed_cart' (סכום קבוע)"
         
-        # Create coupon
-        coupon = coupon_handler.create_coupon(
-            code=code,
-            discount_type=discount_type,
-            amount=amount,
-            description=description,
-            expiry_date=expiry_date,
-            min_amount=min_amount,
-            max_amount=max_amount
-        )
+        try:
+            # Create coupon
+            coupon = coupon_handler.create_coupon(
+                code=code,
+                discount_type=discount_type,
+                amount=amount,
+                description=description,
+                expiry_date=expiry_date,
+                min_amount=min_amount,
+                max_amount=max_amount
+            )
+            logger.debug(f"Coupon created successfully: {coupon}")
+            return f"הקופון {code} נוצר בהצלחה!"
+            
+        except Exception as api_error:
+            logger.error(f"API Error creating coupon: {str(api_error)}")
+            error_msg = str(api_error)
+            if "already exists" in error_msg.lower():
+                return f"קופון עם הקוד {code} כבר קיים במערכת"
+            return f"שגיאה ביצירת הקופון: {error_msg}"
         
-        return f"הקופון {code} נוצר בהצלחה!"
-        
+    except ValueError as ve:
+        logger.error(f"Value error in create_coupon: {str(ve)}")
+        return f"שגיאה בערכים שהוזנו: {str(ve)}"
     except Exception as e:
-        logger.error(f"Error creating coupon: {e}")
+        logger.error(f"Error creating coupon: {str(e)}")
         return f"שגיאה ביצירת הקופון: {str(e)}"
 
 def list_coupons(_: str = "") -> str:
