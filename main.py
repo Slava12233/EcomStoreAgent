@@ -57,8 +57,8 @@ def list_products(_: str = "") -> str:
     """Get list of products from WordPress"""
     try:
         auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
         }
         
         response = requests.get(
@@ -402,7 +402,7 @@ def get_sales() -> str:
         return f"שגיאה בקבלת נתוני המכירות: {str(e)}"
 
 # Initialize LangChain components
-llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4")
+llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4-0125-preview")
 memory = ConversationBufferWindowMemory(
     memory_key="chat_history",
     k=5,
@@ -598,8 +598,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             try:
                 # First verify the product exists
                 auth_params = {
-                    'consumer_key': WP_USER,
-                    'consumer_secret': WP_PASSWORD
+                    'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+                    'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
                 }
                 
                 # Clean up and normalize the product name
@@ -787,6 +787,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update.message.reply_text(welcome_message)
 
+async def test_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Test image upload functionality"""
+    try:
+        # בדיקה שה-MediaHandler קיים ועובד
+        if not media_handler:
+            await update.message.reply_text("שגיאה: MediaHandler לא מאותחל")
+            return
+
+        # בדיקת הרשאות לתיקיית temp
+        temp_dir = 'temp_media'
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+            await update.message.reply_text(f"נוצרה תיקיית {temp_dir}")
+
+        # בדיקת חיבור ל-WooCommerce
+        try:
+            test_product = media_handler.wcapi.get("products").json()
+            await update.message.reply_text(f"חיבור ל-WooCommerce תקין, נמצאו {len(test_product)} מוצרים")
+        except Exception as e:
+            await update.message.reply_text(f"שגיאה בחיבור ל-WooCommerce: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"Error in test_image_upload: {e}")
+        await update.message.reply_text(f"שגיאה בבדיקת העלאת תמונות: {str(e)}")
+
 def main() -> None:
     """Start the bot."""
     logger.info("Initializing bot...")
@@ -796,6 +821,7 @@ def main() -> None:
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("test_image", test_image_upload))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
