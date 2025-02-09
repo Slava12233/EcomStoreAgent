@@ -7,11 +7,13 @@ import asyncio
 import warnings
 from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler, ConversationHandler
 from handlers.media_handler import MediaHandler
 from handlers.coupon_handler import CouponHandler
 from handlers.order_handler import OrderHandler
 from handlers.category_handler import CategoryHandler
+from handlers.customer_handler import CustomerHandler
+from handlers.inventory_handler import InventoryHandler
 from dotenv import load_dotenv
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
@@ -20,6 +22,7 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import SystemMessage
 import re
 from langchain.callbacks.base import BaseCallbackHandler
+from typing import List, Dict, Optional
 
 # השתקת אזהרות
 warnings.filterwarnings("ignore")
@@ -80,30 +83,41 @@ logger.info("="*50)
 load_dotenv()
 logger.debug("Environment variables loaded")
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-logger.debug(f"Bot token loaded: {TELEGRAM_BOT_TOKEN[:10]}...")
+# Get environment variables
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN not found in .env file")
+    raise ValueError("TELEGRAM_BOT_TOKEN not found in environment")
 
-WP_URL = os.getenv("WP_URL")
-WP_USER = os.getenv("WP_USER")
-WP_PASSWORD = os.getenv("WP_PASSWORD")
+WP_URL = os.getenv('WP_URL')
+if not WP_URL:
+    raise ValueError("WP_URL not found in environment")
+
+WP_USER = os.getenv('WP_USER')
+WP_PASSWORD = os.getenv('WP_PASSWORD')
+if not WP_USER or not WP_PASSWORD:
+    raise ValueError("WordPress credentials not found in environment")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not all([WP_URL, WP_USER, WP_PASSWORD, OPENAI_API_KEY]):
     raise ValueError("Missing required environment variables")
 
-# Initialize MediaHandler
-media_handler = MediaHandler(WP_URL, WP_USER, WP_PASSWORD)
-coupon_handler = CouponHandler(WP_URL)
-order_handler = OrderHandler(WP_URL)
-category_handler = CategoryHandler(WP_URL)
+# Initialize handlers as None
+media_handler = None
+coupon_handler = None
+order_handler = None
+category_handler = None
+customer_handler = None
+inventory_handler = None
 
 # Set timezone
 timezone = pytz.timezone('Asia/Jerusalem')
 
 # Store temporary product creation state
 product_creation_state = {}
+
+# Conversation states
+CHOOSING_PRODUCT = 1
 
 def list_products(_: str = "") -> str:
     """Get list of products from WordPress"""
@@ -1061,12 +1075,484 @@ def assign_product_to_categories(product_info: str) -> str:
         logger.error(f"Error assigning product to categories: {e}")
         return f"שגיאה בשיוך המוצר לקטגוריות: {str(e)}"
 
+def list_customers(_: str = "") -> str:
+    """הצגת רשימת הלקוחות בחנות"""
+    try:
+        customers = customer_handler.list_customers(per_page=20)
+        
+        if not customers:
+            return "אין לקוחות בחנות"
+            
+        customers_text = []
+        for customer in customers:
+            # חישוב סך הרכישות של הלקוח
+            total_spent = customer_handler.get_customer_total_spent(customer['id'])
+            
+            customer_line = [
+                f"- {customer['first_name']} {customer['last_name']}",
+                f"אימייל: {customer.get('email', 'לא צוין')}",
+                f"טלפון: {customer.get('billing', {}).get('phone', 'לא צוין')}",
+                f"סה\"כ רכישות: ₪{total_spent:.2f}"
+            ]
+            customers_text.append(" | ".join(customer_line))
+            
+        return "הלקוחות בחנות:\n" + "\n".join(customers_text)
+        
+    except Exception as e:
+        logger.error(f"Error listing customers: {e}")
+        return f"שגיאה בהצגת הלקוחות: {str(e)}"
+
+def get_customer_details(customer_info: str) -> str:
+    """הצגת פרטים מלאים על לקוח ספציפי"""
+    try:
+        # חיפוש לקוח לפי שם או אימייל
+        customers = customer_handler.search_customers(customer_info)
+        
+        if not customers:
+            return f"לא נמצא לקוח התואם ל-'{customer_info}'"
+            
+        customer = customers[0]
+        total_spent = customer_handler.get_customer_total_spent(customer['id'])
+        orders = customer_handler.get_customer_orders(customer['id'])
+        
+        details = [
+            f"פרטי הלקוח {customer['first_name']} {customer['last_name']}:",
+            f"אימייל: {customer.get('email', 'לא צוין')}",
+            f"טלפון: {customer.get('billing', {}).get('phone', 'לא צוין')}",
+            f"כתובת: {customer.get('billing', {}).get('address_1', 'לא צוינה')}",
+            f"עיר: {customer.get('billing', {}).get('city', 'לא צוינה')}",
+            f"מיקוד: {customer.get('billing', {}).get('postcode', 'לא צוין')}",
+            f"סה\"כ רכישות: ₪{total_spent:.2f}",
+            f"מספר הזמנות: {len(orders)}",
+            "\nהזמנות אחרונות:"
+        ]
+        
+        # הוספת 5 ההזמנות האחרונות
+        for order in orders[:5]:
+            order_line = f"- הזמנה #{order['id']} | {order['date_created']} | סטטוס: {order['status']} | סכום: ₪{order['total']}"
+            details.append(order_line)
+            
+        return "\n".join(details)
+        
+    except Exception as e:
+        logger.error(f"Error getting customer details: {e}")
+        return f"שגיאה בקבלת פרטי הלקוח: {str(e)}"
+
+def update_customer(customer_info: str) -> str:
+    """עדכון פרטי לקוח"""
+    try:
+        # Parse customer info from string format
+        # Expected format: customer_id/email | field | new_value
+        parts = customer_info.strip().split("|")
+        if len(parts) != 3:
+            return "נדרש: מזהה/אימייל לקוח | שדה לעדכון | ערך חדש"
+            
+        customer_identifier = parts[0].strip()
+        field = parts[1].strip()
+        new_value = parts[2].strip()
+        
+        # חיפוש הלקוח
+        customers = customer_handler.search_customers(customer_identifier)
+        if not customers:
+            return f"לא נמצא לקוח התואם ל-'{customer_identifier}'"
+            
+        customer_id = customers[0]['id']
+        
+        # מיפוי שמות השדות בעברית לאנגלית
+        field_mapping = {
+            "שם פרטי": "first_name",
+            "שם משפחה": "last_name",
+            "אימייל": "email",
+            "טלפון": "billing.phone",
+            "כתובת": "billing.address_1",
+            "עיר": "billing.city",
+            "מיקוד": "billing.postcode"
+        }
+        
+        if field not in field_mapping:
+            return f"שדה לא חוקי. אפשרויות: {', '.join(field_mapping.keys())}"
+            
+        # בניית אובייקט העדכון
+        update_data = {}
+        if "." in field_mapping[field]:
+            parent, child = field_mapping[field].split(".")
+            if parent not in update_data:
+                update_data[parent] = {}
+            update_data[parent][child] = new_value
+        else:
+            update_data[field_mapping[field]] = new_value
+        
+        # עדכון הלקוח
+        customer_handler.update_customer(customer_id, **update_data)
+        
+        return f"פרטי הלקוח עודכנו בהצלחה"
+        
+    except Exception as e:
+        logger.error(f"Error updating customer: {e}")
+        return f"שגיאה בעדכון פרטי הלקוח: {str(e)}"
+
+def search_customers(search_query: str) -> str:
+    """חיפוש לקוחות"""
+    try:
+        customers = customer_handler.search_customers(search_query)
+        
+        if not customers:
+            return f"לא נמצאו לקוחות התואמים לחיפוש '{search_query}'"
+            
+        results = []
+        for customer in customers:
+            customer_line = [
+                f"- {customer['first_name']} {customer['last_name']}",
+                f"אימייל: {customer.get('email', 'לא צוין')}",
+                f"טלפון: {customer.get('billing', {}).get('phone', 'לא צוין')}"
+            ]
+            results.append(" | ".join(customer_line))
+            
+        return f"תוצאות חיפוש עבור '{search_query}':\n" + "\n".join(results)
+        
+    except Exception as e:
+        logger.error(f"Error searching customers: {e}")
+        return f"שגיאה בחיפוש לקוחות: {str(e)}"
+
+def create_customer(customer_info: str) -> str:
+    """יצירת לקוח חדש"""
+    try:
+        # ניקוי והכנת הטקסט
+        customer_info = customer_info.replace('שם פרטי', '').replace('שם משפחה', '')
+        customer_info = customer_info.replace('אימייל', '').replace('מייל', '')
+        customer_info = customer_info.replace('טלפון', '').replace('כתובת', '')
+        customer_info = customer_info.replace('עיר', '').replace('מיקוד', '')
+        customer_info = customer_info.replace(':', '')  # הסרת נקודתיים
+        
+        # חיפוש אימייל בטקסט
+        import re
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', customer_info)
+        if not email_match:
+            return "לא מצאתי כתובת אימייל תקינה בבקשה. אנא ספק אימייל בפורמט user@domain.com"
+        
+        email = email_match.group()
+        # הסרת האימייל מהטקסט לעיבוד שאר הפרטים
+        customer_info = customer_info.replace(email, '')
+        
+        # פיצול הטקסט לחלקים
+        parts = [p.strip() for p in re.split(r'[|,\n]|(?:ו(?:ה)?(?:שם|מייל|טלפון|כתובת|עיר|מיקוד))|(?:הוא|היא|שלו|שלה)', customer_info) if p.strip()]
+        
+        # חיפוש שם פרטי ושם משפחה
+        names = [p for p in parts if p and p not in [email]]
+        if len(names) < 2:
+            return "לא הצלחתי לזהות שם פרטי ושם משפחה. אנא ספק את הפרטים בצורה ברורה יותר"
+        
+        first_name = names[0].strip()
+        last_name = names[1].strip()
+        
+        logger.info(f"Creating customer with name: {first_name} {last_name}, email: {email}")
+        
+        # יצירת מילון עם הפרטים הבסיסיים
+        customer_data = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": email,
+            "username": email  # משתמש באימייל כשם משתמש
+        }
+        
+        # חיפוש מספר טלפון
+        phone_match = re.search(r'0\d{8,9}', customer_info)
+        if phone_match:
+            customer_data["billing_phone"] = phone_match.group()
+        
+        # חיפוש כתובת (אם יש)
+        address_parts = [p for p in parts[2:] if p and p not in [first_name, last_name, email]]
+        if len(address_parts) >= 1:
+            customer_data["billing_address_1"] = address_parts[0]
+        if len(address_parts) >= 2:
+            customer_data["billing_city"] = address_parts[1]
+        if len(address_parts) >= 3:
+            customer_data["billing_postcode"] = address_parts[2]
+        
+        # יצירת הלקוח
+        customer = customer_handler.create_customer(**customer_data)
+        
+        success_msg = f"לקוח חדש נוצר בהצלחה!\n"
+        success_msg += f"מזהה: {customer['id']}\n"
+        success_msg += f"שם: {customer['first_name']} {customer['last_name']}\n"
+        success_msg += f"אימייל: {customer['email']}"
+        
+        if 'billing' in customer and 'phone' in customer['billing']:
+            success_msg += f"\nטלפון: {customer['billing']['phone']}"
+        
+        return success_msg
+        
+    except Exception as e:
+        logger.error(f"Error creating customer: {e}")
+        error_msg = str(e)
+        if "email already exists" in error_msg.lower():
+            return f"כתובת האימייל {email} כבר קיימת במערכת. אנא נסה כתובת אימייל אחרת."
+        return f"שגיאה ביצירת הלקוח: {error_msg}"
+
+def get_low_stock_products(_: str = "") -> str:
+    """הצגת מוצרים במלאי נמוך
+    
+    דוגמאות:
+    - הצג מוצרים במלאי נמוך
+    - אילו מוצרים עומדים להיגמר
+    - מה המצב של המלאי
+    """
+    try:
+        products = inventory_handler.get_low_stock_products()
+        
+        if not products:
+            return "לא נמצאו מוצרים במלאי נמוך"
+            
+        products_text = []
+        for p in products:
+            stock = p.get('stock_quantity', 0)
+            threshold = p.get('low_stock_amount', 5)
+            products_text.append(
+                f"- {p['name']}: נשארו {stock} יחידות (סף התראה: {threshold})"
+            )
+            
+        return "מוצרים במלאי נמוך:\n" + "\n".join(products_text)
+        
+    except Exception as e:
+        logger.error(f"Error getting low stock products: {e}")
+        return f"שגיאה בקבלת מוצרים במלאי נמוך: {str(e)}"
+
+def update_product_stock(product_info: str) -> str:
+    """עדכון כמות מלאי למוצר
+    
+    דוגמאות:
+    - חולצה כחולה | set | 50
+    - מכנסיים שחורים | add | 20
+    - נעלי ספורט | subtract | 5
+    
+    פורמט: שם מוצר | פעולה | כמות
+    פעולות אפשריות:
+    - set: קביעת כמות מדויקת
+    - add: הוספת כמות למלאי הקיים
+    - subtract: הורדת כמות מהמלאי הקיים
+    """
+    try:
+        # Parse product info: product_name | operation | quantity
+        parts = [p.strip() for p in product_info.split("|")]
+        if len(parts) != 3:
+            return "נדרש: שם מוצר | פעולה (set/add/subtract) | כמות"
+            
+        product_name, operation, quantity = parts
+        
+        try:
+            quantity = int(quantity)
+        except ValueError:
+            return "הכמות חייבת להיות מספר שלם"
+            
+        # Find product
+        auth_params = {
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
+        }
+        
+        search_response = requests.get(
+            f"{WP_URL}/wp-json/wc/v3/products",
+            params={**auth_params, "search": product_name},
+            verify=False
+        )
+        search_response.raise_for_status()
+        products = search_response.json()
+        
+        if not products:
+            return f"לא נמצא מוצר בשם {product_name}"
+            
+        product_id = products[0]["id"]
+        
+        # Update stock
+        result = inventory_handler.update_stock_quantity(product_id, quantity, operation)
+        new_stock = result.get('stock_quantity', 0)
+        
+        operation_text = {
+            'set': 'עודכן ל',
+            'add': 'נוספו',
+            'subtract': 'הורדו'
+        }.get(operation, 'עודכן ל')
+        
+        return f"המלאי של {product_name} {operation_text} {quantity} יחידות (מלאי נוכחי: {new_stock})"
+        
+    except Exception as e:
+        logger.error(f"Error updating stock: {e}")
+        return f"שגיאה בעדכון המלאי: {str(e)}"
+
+def get_product_stock_status(product_name: str) -> str:
+    """הצגת סטטוס מלאי מפורט למוצר
+    
+    דוגמאות:
+    - מה המצב של חולצה כחולה
+    - הראה לי את המלאי של מכנסיים שחורים
+    - כמה יש במלאי מנעלי ספורט
+    """
+    try:
+        # Find product
+        auth_params = {
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
+        }
+        
+        search_response = requests.get(
+            f"{WP_URL}/wp-json/wc/v3/products",
+            params={**auth_params, "search": product_name},
+            verify=False
+        )
+        search_response.raise_for_status()
+        products = search_response.json()
+        
+        if not products:
+            return f"לא נמצא מוצר בשם {product_name}"
+            
+        product_id = products[0]["id"]
+        
+        # Get stock status
+        status = inventory_handler.get_stock_status(product_id)
+        
+        status_text = []
+        status_text.append(f"שם: {status['name']}")
+        status_text.append(f"ניהול מלאי: {'פעיל' if status['manage_stock'] else 'לא פעיל'}")
+        status_text.append(f"כמות במלאי: {status['stock_quantity']}")
+        status_text.append(f"סטטוס: {status['stock_status']}")
+        status_text.append(f"הזמנות מראש: {'מותר' if status['backorders_allowed'] else 'לא מותר'}")
+        if status['low_stock_amount']:
+            status_text.append(f"סף התראת מלאי נמוך: {status['low_stock_amount']}")
+            
+        return "\n".join(status_text)
+        
+    except Exception as e:
+        logger.error(f"Error getting stock status: {e}")
+        return f"שגיאה בקבלת סטטוס מלאי: {str(e)}"
+
+def manage_product_stock_by_attributes(product_info: str) -> str:
+    """ניהול מלאי לפי מאפיינים
+    
+    דוגמאות:
+    חולצה כחולה
+    צבע: כחול | 20
+    מידה: M | 15
+    מידה: L | 25
+    
+    מכנסיים שחורים
+    צבע: שחור | 30
+    מידה: 32 | 10
+    מידה: 34 | 15
+    מידה: 36 | 20
+    """
+    try:
+        lines = product_info.strip().split("\n")
+        if len(lines) < 2:
+            return "נדרש: שם מוצר בשורה ראשונה, ואחריו שורות של מאפיין: ערך | כמות"
+            
+        product_name = lines[0].strip()
+        
+        # Find product
+        auth_params = {
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
+        }
+        
+        search_response = requests.get(
+            f"{WP_URL}/wp-json/wc/v3/products",
+            params={**auth_params, "search": product_name},
+            verify=False
+        )
+        search_response.raise_for_status()
+        products = search_response.json()
+        
+        if not products:
+            return f"לא נמצא מוצר בשם {product_name}"
+            
+        product_id = products[0]["id"]
+        
+        # Parse attributes and quantities
+        attributes = {}
+        for line in lines[1:]:
+            if ":" not in line or "|" not in line:
+                continue
+                
+            attr_part, quantity_part = line.split("|")
+            attr_name, attr_value = [x.strip() for x in attr_part.split(":")]
+            
+            try:
+                quantity = int(quantity_part.strip())
+            except ValueError:
+                return f"הכמות בשורה '{line}' חייבת להיות מספר שלם"
+                
+            if attr_name not in attributes:
+                attributes[attr_name] = {}
+            attributes[attr_name][attr_value] = quantity
+        
+        if not attributes:
+            return "לא נמצאו מאפיינים תקינים"
+            
+        # Update stock by attributes
+        result = inventory_handler.manage_stock_by_attributes(product_id, attributes)
+        
+        return f"המלאי עודכן בהצלחה עבור {result['variations_updated']} וריאציות"
+        
+    except Exception as e:
+        logger.error(f"Error managing stock by attributes: {e}")
+        return f"שגיאה בניהול מלאי לפי מאפיינים: {str(e)}"
+
+def set_product_low_stock_threshold(product_info: str) -> str:
+    """הגדרת סף התראה למלאי נמוך
+    
+    דוגמאות:
+    - חולצה כחולה | 10
+    - מכנסיים שחורים | 15
+    - נעלי ספורט | 5
+    
+    פורמט: שם מוצר | סף התראה
+    """
+    try:
+        # Parse product info: product_name | threshold
+        parts = [p.strip() for p in product_info.split("|")]
+        if len(parts) != 2:
+            return "נדרש: שם מוצר | סף התראה"
+            
+        product_name, threshold = parts
+        
+        try:
+            threshold = int(threshold)
+        except ValueError:
+            return "סף ההתראה חייב להיות מספר שלם"
+            
+        # Find product
+        auth_params = {
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
+        }
+        
+        search_response = requests.get(
+            f"{WP_URL}/wp-json/wc/v3/products",
+            params={**auth_params, "search": product_name},
+            verify=False
+        )
+        search_response.raise_for_status()
+        products = search_response.json()
+        
+        if not products:
+            return f"לא נמצא מוצר בשם {product_name}"
+            
+        product_id = products[0]["id"]
+        
+        # Set threshold
+        inventory_handler.set_low_stock_threshold(product_id, threshold)
+        
+        return f"סף ההתראה למלאי נמוך עבור {product_name} נקבע ל-{threshold} יחידות"
+        
+    except Exception as e:
+        logger.error(f"Error setting low stock threshold: {e}")
+        return f"שגיאה בהגדרת סף התראה למלאי נמוך: {str(e)}"
+
 # Define tools
 tools = [
     Tool(
         name="list_products",
         func=list_products,
-        description="מציג את רשימת המוצרים בחנות עם המחירים שלהם"
+        description="הצגת רשימת המוצרים בחנות"
     ),
     Tool(
         name="create_product",
@@ -1172,6 +1658,70 @@ tools = [
         name="assign_product_to_categories",
         func=assign_product_to_categories,
         description="משייך מוצר לקטגוריות. פורמט: שם מוצר | שמות קטגוריות (מופרדים בפסיקים)"
+    ),
+    Tool(
+        name="list_customers",
+        func=list_customers,
+        description="""
+        הצגת רשימת הלקוחות בחנות. אפשר לבקש בכל מיני דרכים:
+        - "הצג את כל הלקוחות"
+        - "מי הלקוחות שלי?"
+        - "תראה לי את רשימת הלקוחות"
+        - "אני רוצה לראות את כל הלקוחות במערכת"
+        """
+    ),
+    Tool(
+        name="get_customer_details",
+        func=get_customer_details,
+        description="מציג פרטים מלאים על לקוח ספציפי. מקבל שם או אימייל של הלקוח"
+    ),
+    Tool(
+        name="update_customer",
+        func=update_customer,
+        description="עדכון פרטי לקוח. פורמט: מזהה/אימייל | שדה | ערך חדש"
+    ),
+    Tool(
+        name="search_customers",
+        func=search_customers,
+        description="חיפוש לקוחות לפי טקסט חופשי"
+    ),
+    Tool(
+        name="create_customer",
+        func=create_customer,
+        description="""
+        יצירת לקוח חדש בחנות. הפקודה יכולה להתקבל במגוון צורות:
+        - "צור לקוח חדש: שם | שם משפחה | אימייל | טלפון | כתובת | עיר | מיקוד"
+        - "הוסף לקוח: שם | שם משפחה | אימייל"
+        - "רישום לקוח חדש עם השם X ושם משפחה Y והמייל Z"
+        - "תרשום בבקשה לקוח חדש - שם פרטי הוא X שם משפחה Y ואימייל Z"
+        - "אני רוצה להוסיף לקוח חדש למערכת. קוראים לו X X והמייל שלו הוא Y"
+        - כל וריאציה דומה בשפה טבעית שכוללת את פרטי הלקוח הבסיסיים
+        """
+    ),
+    Tool(
+        name="get_low_stock_products",
+        func=get_low_stock_products,
+        description="מציג את רשימת המוצרים במלאי נמוך"
+    ),
+    Tool(
+        name="update_product_stock",
+        func=update_product_stock,
+        description="עדכון כמות מלאי למוצר"
+    ),
+    Tool(
+        name="get_product_stock_status",
+        func=get_product_stock_status,
+        description="מציג את סטטוס מלאי מפורט למוצר"
+    ),
+    Tool(
+        name="manage_product_stock_by_attributes",
+        func=manage_product_stock_by_attributes,
+        description="ניהול מלאי לפי מאפיינים"
+    ),
+    Tool(
+        name="set_product_low_stock_threshold",
+        func=set_product_low_stock_threshold,
+        description="הגדרת סף התראה למלאי נמוך"
     )
 ]
 
@@ -1584,20 +2134,100 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "מצטער, אירעה שגיאה בעיבוד הבקשה שלך. אנא נסה שוב."
         )
 
+async def handle_product_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """טיפול בבחירת מוצר לאחר העלאת תמונה"""
+    try:
+        if not update.message or not update.message.text:
+            await update.message.reply_text("אנא שלח את שם המוצר כטקסט")
+            return CHOOSING_PRODUCT
+            
+        product_name = update.message.text.strip()
+        
+        # Get the temporary photo path from context
+        if not context.user_data.get('temp_photo_path'):
+            await update.message.reply_text("לא נמצאה תמונה להעלאה. אנא שלח תמונה חדשה")
+            return ConversationHandler.END
+            
+        # Search for the product
+        auth_params = {
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
+        }
+        
+        search_response = requests.get(
+            f"{WP_URL}/wp-json/wc/v3/products",
+            params={**auth_params, "search": product_name},
+            verify=False
+        )
+        search_response.raise_for_status()
+        products = search_response.json()
+        
+        if not products:
+            await update.message.reply_text(f"לא נמצא מוצר בשם {product_name}")
+            return ConversationHandler.END
+            
+        product = products[0]
+        product_id = product["id"]
+        
+        # Upload the image
+        try:
+            result = media_handler.upload_product_image(
+                product_id,
+                context.user_data['temp_photo_path']
+            )
+            await update.message.reply_text(f"התמונה הועלתה בהצלחה למוצר {product_name}")
+        except Exception as e:
+            logger.error(f"Error uploading image: {e}")
+            await update.message.reply_text(f"שגיאה בהעלאת התמונה: {str(e)}")
+        finally:
+            # Clean up temporary file
+            if os.path.exists(context.user_data['temp_photo_path']):
+                os.remove(context.user_data['temp_photo_path'])
+            del context.user_data['temp_photo_path']
+            
+        return ConversationHandler.END
+        
+    except Exception as e:
+        logger.error(f"Error in handle_product_choice: {e}")
+        await update.message.reply_text(f"שגיאה בטיפול בבחירת המוצר: {str(e)}")
+        return ConversationHandler.END
+
 def main() -> None:
     """Start the bot."""
-    # הודעה בטרמינל שהבוט התחיל לרוץ
-    print("\nBot is running... Press Ctrl+C to stop")
-    print(f"Logs are being written to: {log_file_path}\n")
-    
-    # Create the Application
+    # Create the Application and pass it your bot's token.
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("test_image", test_image_upload))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Initialize handlers
+    global media_handler, coupon_handler, order_handler, category_handler, customer_handler, inventory_handler
+    
+    try:
+        media_handler = MediaHandler(WP_URL, WP_USER, WP_PASSWORD)
+        coupon_handler = CouponHandler(WP_URL)
+        order_handler = OrderHandler(WP_URL)
+        category_handler = CategoryHandler(WP_URL)
+        customer_handler = CustomerHandler(WP_URL)
+        inventory_handler = InventoryHandler(WP_URL)
+        logger.info("All handlers initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing handlers: {e}")
+        raise
+    
+    # Add conversation handler
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start),
+            MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
+        ],
+        states={
+            CHOOSING_PRODUCT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_product_choice)
+            ],
+        },
+        fallbacks=[],
+    )
+    
+    application.add_handler(conv_handler)
     
     # Add error handler
     application.add_error_handler(error_handler)
@@ -1606,5 +2236,5 @@ def main() -> None:
     logger.info("Starting bot...")
     application.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
