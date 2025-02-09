@@ -142,7 +142,7 @@ A Telegram bot that enables natural language management of a WooCommerce WordPre
   - עדכון פרטי לקוח
   - חיפוש לקוחות
 
-[ ] ניהול קטגוריות
+[X] ניהול קטגוריות
   - יצירת קטגוריה חדשה
   - עריכת קטגוריה קיימת
   - מחיקת קטגוריה
@@ -166,45 +166,31 @@ A Telegram bot that enables natural language management of a WooCommerce WordPre
 ### סדר פיתוח מוצע:
 [X] ניהול קופונים (הכי דחוף ופשוט יחסית)
 [X] ניהול הזמנות (חשוב למעקב ותפעול)
-[ ] ניהול קטגוריות (יעזור בארגון המוצרים)
+[X] ניהול קטגוריות (יעזור בארגון המוצרים)
 [ ] ניהול לקוחות
 [ ] ניהול מלאי מתקדם
 [ ] ניהול שילוח
 [ ] הגדרות חנות
 
-### שלב פיתוח ניהול קופונים
-[X] הוספת מחלקה חדשה `coupon_handler.py`
+### שלב פיתוח ניהול קטגוריות
+[X] הוספת מחלקה חדשה `category_handler.py`
 [X] הוספת פונקציות בסיסיות:
-  - create_coupon
-  - edit_coupon
-  - delete_coupon
-  - list_coupons
-  - get_coupon_details
-[X] אינטגרציה עם הבוט הראשי
-[X] הוספת דוגמאות שימוש בעברית
-[X] בדיקות ותיעוד
-
-### שלב הבא - פיתוח ניהול הזמנות
-[X] הוספת מחלקה חדשה `order_handler.py`
-[X] הוספת פונקציות בסיסיות:
-  - list_orders
-  - get_order_details
-  - update_order_status
-  - search_orders
-  - get_order_notes
-  - add_order_note
-[X] אינטגרציה עם הבוט הראשי
-[X] הוספת דוגמאות שימוש בעברית
-[X] בדיקות ותיעוד
-
-### שלב הבא - פיתוח ניהול קטגוריות
-[ ] הוספת מחלקה חדשה `category_handler.py`
-[ ] הוספת פונקציות בסיסיות:
   - list_categories
   - create_category
   - update_category
   - delete_category
   - assign_products_to_category
+[X] אינטגרציה עם הבוט הראשי
+[X] הוספת דוגמאות שימוש בעברית
+[X] בדיקות ותיעוד
+
+### שלב הבא - פיתוח ניהול לקוחות
+[ ] הוספת מחלקה חדשה `customer_handler.py`
+[ ] הוספת פונקציות בסיסיות:
+  - list_customers
+  - get_customer_details
+  - update_customer
+  - search_customers
 [ ] אינטגרציה עם הבוט הראשי
 [ ] הוספת דוגמאות שימוש בעברית
 [ ] בדיקות ותיעוד

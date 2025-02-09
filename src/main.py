@@ -9,6 +9,9 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 from handlers.media_handler import MediaHandler
+from handlers.coupon_handler import CouponHandler
+from handlers.order_handler import OrderHandler
+from handlers.category_handler import CategoryHandler
 from dotenv import load_dotenv
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
@@ -16,8 +19,6 @@ from langchain.agents import AgentType, Tool, initialize_agent
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import SystemMessage
 import re
-from handlers.coupon_handler import CouponHandler
-from handlers.order_handler import OrderHandler
 from langchain.callbacks.base import BaseCallbackHandler
 
 # השתקת אזהרות
@@ -96,6 +97,7 @@ if not all([WP_URL, WP_USER, WP_PASSWORD, OPENAI_API_KEY]):
 media_handler = MediaHandler(WP_URL, WP_USER, WP_PASSWORD)
 coupon_handler = CouponHandler(WP_URL)
 order_handler = OrderHandler(WP_URL)
+category_handler = CategoryHandler(WP_URL)
 
 # Set timezone
 timezone = pytz.timezone('Asia/Jerusalem')
@@ -874,6 +876,191 @@ def create_order(order_info: str) -> str:
         logger.error(f"Error creating order: {str(e)}")
         return f"שגיאה ביצירת ההזמנה: {str(e)}"
 
+def list_categories(_: str = "") -> str:
+    """הצגת רשימת הקטגוריות בחנות"""
+    try:
+        categories = category_handler.list_categories()
+        
+        if not categories:
+            return "אין קטגוריות בחנות"
+            
+        categories_text = []
+        for cat in categories:
+            # הוספת שם הקטגוריה ומזהה
+            cat_line = f"- {cat['name']} (ID: {cat['id']})"
+            
+            # הוספת מספר המוצרים בקטגוריה
+            cat_line += f" | {cat['count']} מוצרים"
+            
+            # אם יש קטגוריית אב, הוספת המידע
+            if cat.get('parent'):
+                parent = next((c['name'] for c in categories if c['id'] == cat['parent']), None)
+                if parent:
+                    cat_line += f" | קטגוריית אב: {parent}"
+                    
+            categories_text.append(cat_line)
+            
+        return "הקטגוריות בחנות:\n" + "\n".join(categories_text)
+        
+    except Exception as e:
+        logger.error(f"Error listing categories: {e}")
+        return f"שגיאה בהצגת הקטגוריות: {str(e)}"
+
+def create_category(category_info: str) -> str:
+    """יצירת קטגוריה חדשה"""
+    try:
+        # Parse category info from string format
+        # Expected format: name | description | [parent_category_name]
+        parts = category_info.strip().split("|")
+        if len(parts) < 1:
+            return "נדרש לפחות שם לקטגוריה"
+            
+        name = parts[0].strip()
+        description = parts[1].strip() if len(parts) > 1 else ""
+        parent_name = parts[2].strip() if len(parts) > 2 else None
+        
+        # אם צוינה קטגוריית אב, מציאת המזהה שלה
+        parent_id = None
+        if parent_name:
+            categories = category_handler.list_categories()
+            parent = next((cat for cat in categories if cat['name'].lower() == parent_name.lower()), None)
+            if parent:
+                parent_id = parent['id']
+            else:
+                return f"לא נמצאה קטגוריית אב בשם {parent_name}"
+        
+        # יצירת הקטגוריה
+        category = category_handler.create_category(name, description, parent_id)
+        
+        return f"הקטגוריה {name} נוצרה בהצלחה (ID: {category['id']})"
+        
+    except Exception as e:
+        logger.error(f"Error creating category: {e}")
+        return f"שגיאה ביצירת הקטגוריה: {str(e)}"
+
+def update_category(category_info: str) -> str:
+    """עדכון פרטי קטגוריה"""
+    try:
+        # Parse category info from string format
+        # Expected format: category_name | field | new_value
+        parts = category_info.strip().split("|")
+        if len(parts) != 3:
+            return "נדרש: שם קטגוריה | שדה לעדכון | ערך חדש"
+            
+        category_name = parts[0].strip()
+        field = parts[1].strip()
+        new_value = parts[2].strip()
+        
+        # חיפוש הקטגוריה לפי שם
+        categories = category_handler.list_categories()
+        category = next((cat for cat in categories if cat['name'].lower() == category_name.lower()), None)
+        if not category:
+            return f"לא נמצאה קטגוריה בשם {category_name}"
+            
+        # מיפוי שמות השדות בעברית לאנגלית
+        field_mapping = {
+            "שם": "name",
+            "תיאור": "description",
+            "אב": "parent"
+        }
+        
+        if field not in field_mapping:
+            return f"שדה לא חוקי. אפשרויות: {', '.join(field_mapping.keys())}"
+            
+        # אם מעדכנים קטגוריית אב, צריך למצוא את המזהה שלה
+        if field == "אב":
+            parent = next((cat for cat in categories if cat['name'].lower() == new_value.lower()), None)
+            if not parent:
+                return f"לא נמצאה קטגוריית אב בשם {new_value}"
+            new_value = parent['id']
+        
+        # עדכון הקטגוריה
+        update_data = {field_mapping[field]: new_value}
+        category_handler.update_category(category['id'], **update_data)
+        
+        return f"הקטגוריה {category_name} עודכנה בהצלחה"
+        
+    except Exception as e:
+        logger.error(f"Error updating category: {e}")
+        return f"שגיאה בעדכון הקטגוריה: {str(e)}"
+
+def delete_category(category_name: str) -> str:
+    """מחיקת קטגוריה"""
+    try:
+        # חיפוש הקטגוריה לפי שם
+        categories = category_handler.list_categories()
+        category = next((cat for cat in categories if cat['name'].lower() == category_name.lower()), None)
+        if not category:
+            return f"לא נמצאה קטגוריה בשם {category_name}"
+            
+        # בדיקה אם יש מוצרים בקטגוריה
+        if category['count'] > 0:
+            return f"לא ניתן למחוק את הקטגוריה {category_name} כי יש בה {category['count']} מוצרים"
+            
+        # מחיקת הקטגוריה
+        category_handler.delete_category(category['id'])
+        
+        return f"הקטגוריה {category_name} נמחקה בהצלחה"
+        
+    except Exception as e:
+        logger.error(f"Error deleting category: {e}")
+        return f"שגיאה במחיקת הקטגוריה: {str(e)}"
+
+def assign_product_to_categories(product_info: str) -> str:
+    """שיוך מוצר לקטגוריות"""
+    try:
+        # Parse product info from string format
+        # Expected format: product_name | category_name1,category_name2,...
+        parts = product_info.strip().split("|")
+        if len(parts) != 2:
+            return "נדרש: שם מוצר | שמות קטגוריות (מופרדים בפסיקים)"
+            
+        product_name = parts[0].strip()
+        category_names = [name.strip() for name in parts[1].split(",")]
+        
+        # חיפוש המוצר
+        auth_params = {
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
+        }
+        
+        search_response = requests.get(
+            f"{WP_URL}/wp-json/wc/v3/products",
+            params={**auth_params, "search": product_name},
+            verify=False
+        )
+        search_response.raise_for_status()
+        products = search_response.json()
+        
+        if not products:
+            return f"לא נמצא מוצר בשם {product_name}"
+            
+        product_id = products[0]["id"]
+        
+        # חיפוש הקטגוריות
+        categories = category_handler.list_categories()
+        category_ids = []
+        not_found = []
+        
+        for name in category_names:
+            category = next((cat for cat in categories if cat['name'].lower() == name.lower()), None)
+            if category:
+                category_ids.append(category['id'])
+            else:
+                not_found.append(name)
+                
+        if not_found:
+            return f"לא נמצאו הקטגוריות הבאות: {', '.join(not_found)}"
+            
+        # שיוך המוצר לקטגוריות
+        category_handler.assign_product_to_category(product_id, category_ids)
+        
+        return f"המוצר {product_name} שויך בהצלחה לקטגוריות: {', '.join(category_names)}"
+        
+    except Exception as e:
+        logger.error(f"Error assigning product to categories: {e}")
+        return f"שגיאה בשיוך המוצר לקטגוריות: {str(e)}"
+
 # Define tools
 tools = [
     Tool(
@@ -960,6 +1147,31 @@ tools = [
         name="create_order",
         func=create_order,
         description="יוצר הזמנה חדשה. פורמט: שם_פרטי | שם_משפחה | אימייל | טלפון | כתובת | עיר | מיקוד | מזהה_מוצר:כמות,מזהה_מוצר:כמות | [שיטת_משלוח]"
+    ),
+    Tool(
+        name="list_categories",
+        func=list_categories,
+        description="מציג את רשימת הקטגוריות בחנות"
+    ),
+    Tool(
+        name="create_category",
+        func=create_category,
+        description="יוצר קטגוריה חדשה. פורמט: שם | תיאור | [קטגוריית אב]"
+    ),
+    Tool(
+        name="update_category",
+        func=update_category,
+        description="עורך פרטי קטגוריה. פורמט: שם קטגוריה | שדה | ערך חדש"
+    ),
+    Tool(
+        name="delete_category",
+        func=delete_category,
+        description="מוחק קטגוריה. מקבל את שם הקטגוריה"
+    ),
+    Tool(
+        name="assign_product_to_categories",
+        func=assign_product_to_categories,
+        description="משייך מוצר לקטגוריות. פורמט: שם מוצר | שמות קטגוריות (מופרדים בפסיקים)"
     )
 ]
 
