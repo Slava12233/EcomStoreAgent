@@ -374,3 +374,99 @@
 2. **תמיכה בעברית**: כל הפקודות תומכות בטקסט חופשי בעברית.
 3. **שגיאות**: במקרה של שגיאה, יוצג הסבר מפורט בעברית על הבעיה.
 4. **לוגים**: כל פעולות המלאי נרשמות בלוג המערכת לצורך מעקב ובקרה. 
+
+# WordPress AI Agent Capabilities
+
+## Core Features
+
+### Natural Language Processing
+- Full Hebrew language support for all commands and responses
+- Intelligent parsing of free-text input for customer details
+- Flexible command formats with multiple variations
+- Context-aware conversations
+
+### Product Management
+- List all products with detailed information
+- Create new products with multiple attributes
+- Update product details (price, stock, description)
+- Remove discounts and special offers
+- Upload and manage product images
+- Search products by name or attributes
+
+### Order Management
+- View all orders with filtering options
+- Get detailed order information
+- Update order status
+- Search orders by various parameters
+- Create new orders with multiple items
+
+### Customer Management
+- List all customers with purchase history
+- View detailed customer information
+- Update customer details
+- Search customers by name or email
+- Create new customers with smart detail extraction
+- Automatic email and phone number validation
+
+### Coupon Management
+- Create new coupons with various conditions
+- List active coupons
+- Update coupon details
+- Delete expired coupons
+- Set usage restrictions
+
+### Category Management
+- Create new categories and subcategories
+- Update category details
+- Delete empty categories
+- Assign products to categories
+- View category hierarchy
+
+### Inventory Management
+- Track stock levels
+- Set low stock alerts
+- Update stock quantities
+- Manage stock by attributes (size, color, etc.)
+- View detailed stock status
+
+## Technical Features
+
+### Logging System
+- Rotating log files with size limits
+- Separated logs by severity level
+- Detailed debug logging
+- Clean console output
+- External library log management
+
+### Security
+- Secure API credential management
+- Input validation and sanitization
+- Error handling for sensitive operations
+- Audit logging for important actions
+
+### Code Structure
+- Modular handler-based architecture
+- Clean separation of concerns
+- Consistent error handling
+- Comprehensive documentation
+- Type hints and validation
+
+### Development Tools
+- Automated testing support
+- Development environment setup
+- Debugging capabilities
+- Performance monitoring
+
+## Upcoming Features
+
+### Shipping Management
+- Define shipping zones
+- Set shipping rates
+- Track shipments
+- Manage shipping methods
+
+### Store Settings
+- Update basic store information
+- Configure tax settings
+- Manage payment options
+- Set store preferences 
