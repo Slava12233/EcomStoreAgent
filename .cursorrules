@@ -103,6 +103,10 @@ If needed, you can further use the `web_scraper.py` file to scrape the web page 
 - When handling WooCommerce API operations, use WC_CONSUMER_KEY and WC_CONSUMER_SECRET for product operations, and WP_USER/WP_PASSWORD for media uploads
 - Always include detailed logging in image upload operations for better debugging
 - Use separate authentication methods for WordPress media uploads (Basic Auth) and WooCommerce operations (API keys)
+- When creating a new customer in WooCommerce, always include 'username' and 'role' fields to avoid Bad Request errors
+- Use natural language processing to extract customer details from free text input, making the bot more user-friendly
+- Implement robust error handling for email validation and duplicate email checks in customer creation
+- Add detailed logging for API responses to help troubleshoot customer management issues
 
 # Scratchpad
 
@@ -136,11 +140,12 @@ A Telegram bot that enables natural language management of a WooCommerce WordPre
   - עדכון סטטוס הזמנה
   - חיפוש הזמנות לפי פרמטרים שונים
 
-[ ] ניהול לקוחות
+[X] ניהול לקוחות
   - הצגת רשימת לקוחות
   - הצגת פרטי לקוח
   - עדכון פרטי לקוח
   - חיפוש לקוחות
+  - יצירת לקוח חדש
 
 [X] ניהול קטגוריות
   - יצירת קטגוריה חדשה
@@ -167,7 +172,7 @@ A Telegram bot that enables natural language management of a WooCommerce WordPre
 [X] ניהול קופונים (הכי דחוף ופשוט יחסית)
 [X] ניהול הזמנות (חשוב למעקב ותפעול)
 [X] ניהול קטגוריות (יעזור בארגון המוצרים)
-[ ] ניהול לקוחות
+[X] ניהול לקוחות
 [ ] ניהול מלאי מתקדם
 [ ] ניהול שילוח
 [ ] הגדרות חנות
@@ -185,12 +190,26 @@ A Telegram bot that enables natural language management of a WooCommerce WordPre
 [X] בדיקות ותיעוד
 
 ### שלב הבא - פיתוח ניהול לקוחות
-[ ] הוספת מחלקה חדשה `customer_handler.py`
-[ ] הוספת פונקציות בסיסיות:
+[X] הוספת מחלקה חדשה `customer_handler.py`
+[X] הוספת פונקציות בסיסיות:
   - list_customers
   - get_customer_details
   - update_customer
   - search_customers
+[X] אינטגרציה עם הבוט הראשי
+[X] הוספת דוגמאות שימוש בעברית
+[X] שיפור יכולות הבנת שפה טבעית
+  - תמיכה במגוון פורמטים של הזנת פרטי לקוח
+  - זיהוי אוטומטי של אימייל וטלפון מטקסט חופשי
+  - הוספת דוגמאות שימוש מגוונות
+[X] בדיקות ותיעוד
+
+### שלב הבא - פיתוח ניהול מלאי מתקדם
+[ ] הוספת מחלקה חדשה `inventory_handler.py`
+[ ] הוספת פונקציות בסיסיות:
+  - get_low_stock_products
+  - update_stock_automatically
+  - manage_stock_by_attributes
 [ ] אינטגרציה עם הבוט הראשי
 [ ] הוספת דוגמאות שימוש בעברית
 [ ] בדיקות ותיעוד
