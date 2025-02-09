@@ -9,5 +9,16 @@ from .order_handler import OrderHandler
 from .category_handler import CategoryHandler
 from .customer_handler import CustomerHandler
 from .inventory_handler import InventoryHandler
+from .product_handler import ProductHandler
+from .settings_handler import SettingsHandler
 
-__all__ = ['MediaHandler', 'CouponHandler', 'OrderHandler', 'CategoryHandler', 'CustomerHandler', 'InventoryHandler'] 
+__all__ = [
+    'MediaHandler',
+    'CouponHandler',
+    'OrderHandler',
+    'CategoryHandler',
+    'CustomerHandler',
+    'InventoryHandler',
+    'ProductHandler',
+    'SettingsHandler'
+] 

@@ -8,13 +8,17 @@ import warnings
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler, ConversationHandler
-from handlers.media_handler import MediaHandler
-from handlers.coupon_handler import CouponHandler
-from handlers.order_handler import OrderHandler
-from handlers.category_handler import CategoryHandler
-from handlers.customer_handler import CustomerHandler
-from handlers.inventory_handler import InventoryHandler
-from dotenv import load_dotenv
+from handlers import (
+    MediaHandler,
+    CouponHandler,
+    OrderHandler,
+    CategoryHandler,
+    CustomerHandler,
+    InventoryHandler,
+    ProductHandler,
+    SettingsHandler
+)
+from utils import setup_logger, load_config
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain.agents import AgentType, Tool, initialize_agent
@@ -30,85 +34,37 @@ warnings.filterwarnings("ignore")
 import urllib3
 urllib3.disable_warnings()
 
-# יצירת תיקיית לוגים אם לא קיימת
-os.makedirs('logs', exist_ok=True)
+# טעינת הגדרות
+config = load_config()
 
-# הגדרת לוגר ראשי
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# הגדרת לוגר
+logger = setup_logger(__name__)
 
-# הסרת כל ההנדלרים הקיימים
-for handler in logger.handlers[:]:
-    logger.removeHandler(handler)
+# הגדרת לוגר ייעודי לאירועי בוט
+bot_logger = setup_logger('bot_events')
 
-# הגדרת StreamHandler לשלוח רק שגיאות קריטיות לטרמינל
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.CRITICAL)
-console_handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
-logger.addHandler(console_handler)
+# הגדרת לוגר ייעודי לפעולות משתמש
+user_logger = setup_logger('user_actions')
 
-# הוספת הנדלר לקובץ עבור כל הלוגים
-log_file_path = os.path.join(os.path.dirname(__file__), 'logs', 'bot.log')
-file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8', delay=False)
-file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-logger.addHandler(file_handler)
+# הגדרת לוגר ייעודי לשגיאות
+error_logger = setup_logger('errors', level='ERROR')
 
-# הגדרת לוגר ספציפי ל-python-telegram-bot
-telegram_logger = logging.getLogger('telegram')
-telegram_logger.setLevel(logging.INFO)
-telegram_logger.addHandler(file_handler)
-telegram_logger.propagate = False  # מניעת העברת לוגים למעלה בהיררכיה
+# הגדרת file handler עבור agent logger
+log_dir = 'logs'
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+file_handler = logging.FileHandler(os.path.join(log_dir, 'agent.log'), encoding='utf-8')
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
-# הגדרת לוגר ספציפי ל-LangChain
-langchain_logger = logging.getLogger('langchain')
-langchain_logger.setLevel(logging.WARNING)  # רק אזהרות חשובות
-langchain_logger.addHandler(file_handler)
-langchain_logger.propagate = False
-
-# הגדרת לוגר ספציפי ל-urllib3
-urllib3_logger = logging.getLogger('urllib3')
-urllib3_logger.setLevel(logging.WARNING)  # רק אזהרות חשובות
-urllib3_logger.addHandler(file_handler)
-urllib3_logger.propagate = False
-
-# Add initial log entry to verify logging is working
-current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-logger.info("="*50)
-logger.info(f"Bot Started at {current_time}")
-logger.info(f"Log file location: {log_file_path}")
-logger.info("="*50)
-
-# Load environment variables
-load_dotenv()
-logger.debug("Environment variables loaded")
-
-# Get environment variables
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN not found in environment")
-
-WP_URL = os.getenv('WP_URL')
-if not WP_URL:
-    raise ValueError("WP_URL not found in environment")
-
-WP_USER = os.getenv('WP_USER')
-WP_PASSWORD = os.getenv('WP_PASSWORD')
-if not WP_USER or not WP_PASSWORD:
-    raise ValueError("WordPress credentials not found in environment")
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not all([WP_URL, WP_USER, WP_PASSWORD, OPENAI_API_KEY]):
-    raise ValueError("Missing required environment variables")
-
-# Initialize handlers as None
-media_handler = None
-coupon_handler = None
-order_handler = None
-category_handler = None
-customer_handler = None
-inventory_handler = None
+# Initialize handlers
+media_handler = MediaHandler(config['WP_URL'], config['WP_USER'], config['WP_PASSWORD'])
+coupon_handler = CouponHandler(config['WP_URL'])
+order_handler = OrderHandler(config['WP_URL'])
+category_handler = CategoryHandler(config['WP_URL'])
+customer_handler = CustomerHandler(config['WP_URL'])
+inventory_handler = InventoryHandler(config['WP_URL'])
+product_handler = ProductHandler(config['WP_URL'])
+settings_handler = SettingsHandler(config['WP_URL'])
 
 # Set timezone
 timezone = pytz.timezone('Asia/Jerusalem')
@@ -122,18 +78,7 @@ CHOOSING_PRODUCT = 1
 def list_products(_: str = "") -> str:
     """Get list of products from WordPress"""
     try:
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
-        response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "per_page": 10},
-            verify=False
-        )
-        response.raise_for_status()
-        products = response.json()
+        products = product_handler.list_products(10)
         
         if not products:
             return "לא נמצאו מוצרים בחנות"
@@ -171,22 +116,8 @@ def update_price(product_info: str) -> str:
         product_name = " ".join(parts[:-1])
         price_info = parts[-1]
         
-        # Check if it's a percentage change
-        percentage_match = re.match(r'^-?(\d+)%$', price_info)
-        
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
         # Search for product
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
@@ -194,6 +125,9 @@ def update_price(product_info: str) -> str:
         product = products[0]
         product_id = product["id"]
         current_price = float(product.get("price", 0))
+        
+        # Check if it's a percentage change
+        percentage_match = re.match(r'^-?(\d+)%$', price_info)
         
         # Calculate new price
         if percentage_match:
@@ -206,18 +140,8 @@ def update_price(product_info: str) -> str:
                 return "לא צוין מחיר תקין"
             new_price = float(price_match.group(1))
         
-        # Update product
-        update_data = {
-            "regular_price": str(new_price)
-        }
-        
-        response = requests.put(
-            f"{WP_URL}/wp-json/wc/v3/products/{product_id}",
-            params=auth_params,
-            json=update_data,
-            verify=False
-        )
-        response.raise_for_status()
+        # Update product price
+        product_handler.update_price(product_id, str(new_price))
         
         return f"המחיר של {product_name} עודכן בהצלחה ל-₪{new_price:.2f}"
         
@@ -228,187 +152,117 @@ def update_price(product_info: str) -> str:
 def remove_discount(product_name: str) -> str:
     """Remove discount from a product"""
     try:
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
         # Search for product
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
             
-        product_id = products[0]["id"]
+        product = products[0]
+        product_id = product["id"]
         
-        # Remove sale price
-        update_data = {
-            "sale_price": ""
-        }
+        # Remove discount
+        product_handler.remove_discount(product_id)
         
-        response = requests.put(
-            f"{WP_URL}/wp-json/wc/v3/products/{product_id}",
-            params=auth_params,
-            json=update_data,
-            verify=False
-        )
-        response.raise_for_status()
-        
-        return f"המבצע הוסר בהצלחה מהמוצר {products[0]['name']}"
+        return f"ההנחה הוסרה בהצלחה מהמוצר {product_name}"
         
     except Exception as e:
         logger.error(f"Error removing discount: {e}")
-        return f"שגיאה בהסרת המבצע: {str(e)}"
+        return f"שגיאה בהסרת ההנחה: {str(e)}"
 
 def create_product(product_info: str) -> str:
     """Create a new product in WordPress"""
     try:
-        # Parse product info from string format
-        # Expected format: name | description | regular_price | [stock_quantity]
-        parts = product_info.strip().split("|")
-        if len(parts) < 3:
-            return "נדרש לפחות: שם מוצר | תיאור | מחיר"
+        # Parse product info
+        lines = product_info.strip().split('\n')
+        if len(lines) < 2:
+            return "נדרש לפחות שם מוצר ומחיר"
             
-        name = parts[0].strip()
-        description = parts[1].strip()
-        regular_price = parts[2].strip()
-        stock_quantity = int(parts[3].strip()) if len(parts) > 3 else None
-        
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
-        # Prepare product data
-        product_data = {
-            "name": name,
-            "description": description,
-            "regular_price": regular_price,
-            "status": "publish"
-        }
-        
-        if stock_quantity is not None:
-            product_data["manage_stock"] = True
-            product_data["stock_quantity"] = stock_quantity
+        name = lines[0]
+        price = lines[1]
+        description = lines[2] if len(lines) > 2 else ""
+        stock = int(lines[3]) if len(lines) > 3 and lines[3].isdigit() else None
         
         # Create product
-        response = requests.post(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params=auth_params,
-            json=product_data,
-            verify=False
+        new_product = product_handler.create_product(
+            name=name,
+            description=description,
+            regular_price=price,
+            stock_quantity=stock
         )
-        response.raise_for_status()
         
-        return f"המוצר {name} נוצר בהצלחה"
+        return f"המוצר {new_product['name']} נוצר בהצלחה"
         
     except Exception as e:
         logger.error(f"Error creating product: {e}")
         return f"שגיאה ביצירת המוצר: {str(e)}"
 
 def edit_product(product_info: str) -> str:
-    """Edit product details in WordPress"""
+    """Edit an existing product in WordPress"""
     try:
-        # Parse product info from string format
-        # Expected format: product_name | field_to_edit | new_value
-        parts = product_info.strip().split("|")
-        if len(parts) != 3:
-            return "נדרש: שם מוצר | שדה לעריכה | ערך חדש"
+        # Parse product info
+        lines = product_info.strip().split('\n')
+        if len(lines) < 2:
+            return "נדרש שם מוצר ולפחות שדה אחד לעדכון"
             
-        product_name = parts[0].strip()
-        field = parts[1].strip()
-        new_value = parts[2].strip()
-        
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
+        # Get product name from first line
+        product_name = lines[0]
         
         # Search for product
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
             
-        product_id = products[0]["id"]
+        product = products[0]
+        product_id = product["id"]
         
-        # Map field names to API fields
-        field_mapping = {
-            "שם": "name",
-            "תיאור": "description",
-            "מחיר": "regular_price",
-            "כמות": "stock_quantity"
-        }
-        
-        if field not in field_mapping:
-            return f"שדה לא חוקי. אפשרויות: {', '.join(field_mapping.keys())}"
+        # Parse update fields
+        update_data = {}
+        for line in lines[1:]:
+            if ':' not in line:
+                continue
+                
+            field, value = line.split(':', 1)
+            field = field.strip()
+            value = value.strip()
             
-        # Prepare update data
-        update_data = {
-            field_mapping[field]: new_value
-        }
-        
-        # If updating stock, make sure manage_stock is enabled
-        if field == "כמות":
-            update_data["manage_stock"] = True
-            update_data["stock_quantity"] = int(new_value)
-        
+            if field == 'שם':
+                update_data['name'] = value
+            elif field == 'תיאור':
+                update_data['description'] = value
+            elif field == 'מחיר':
+                update_data['regular_price'] = value
+            elif field == 'מלאי' and value.isdigit():
+                update_data['stock_quantity'] = int(value)
+                update_data['manage_stock'] = True
+                
+        if not update_data:
+            return "לא נמצאו שדות תקינים לעדכון"
+            
         # Update product
-        response = requests.put(
-            f"{WP_URL}/wp-json/wc/v3/products/{product_id}",
-            params=auth_params,
-            json=update_data,
-            verify=False
-        )
-        response.raise_for_status()
+        updated_product = product_handler.update_product(product_id, **update_data)
         
-        return f"המוצר {product_name} עודכן בהצלחה"
+        return f"המוצר {updated_product['name']} עודכן בהצלחה"
         
     except Exception as e:
         logger.error(f"Error editing product: {e}")
-        return f"שגיאה בעריכת המוצר: {str(e)}"
+        return f"שגיאה בעדכון המוצר: {str(e)}"
 
 def delete_product(product_name: str) -> str:
     """Delete a product from WordPress"""
     try:
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
         # Search for product
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
             
-        product_id = products[0]["id"]
+        product = products[0]
+        product_id = product["id"]
         
         # Delete product
-        response = requests.delete(
-            f"{WP_URL}/wp-json/wc/v3/products/{product_id}",
-            params={**auth_params, "force": True},
-            verify=False
-        )
-        response.raise_for_status()
+        product_handler.delete_product(product_id)
         
         return f"המוצר {product_name} נמחק בהצלחה"
         
@@ -419,40 +273,37 @@ def delete_product(product_name: str) -> str:
 def get_product_details(product_name: str) -> str:
     """Get detailed information about a product"""
     try:
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
         # Search for product
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
             
         product = products[0]
+        product_id = product["id"]
         
-        # Format product details
-        details = [
-            f"שם: {product['name']}",
-            f"תיאור: {product['description']}",
-            f"מחיר: ₪{product.get('price', 'לא זמין')}",
-            f"סטטוס: {product['status']}",
+        # Get full product details
+        details = product_handler.get_product_details(product_id)
+        
+        # Format response
+        response = [
+            f"פרטי המוצר {details['name']}:",
+            f"מחיר: ₪{details.get('price', 'לא זמין')}",
+            f"תיאור: {details.get('description', 'אין תיאור')}"
         ]
         
-        if product.get('manage_stock'):
-            details.append(f"כמות במלאי: {product.get('stock_quantity', 0)}")
+        if details.get('manage_stock'):
+            stock = details.get('stock_quantity', 0)
+            status = "במלאי" if stock > 0 else "אזל מהמלאי"
+            response.append(f"מלאי: {status} ({stock} יחידות)")
+        else:
+            status = "במלאי" if details.get('in_stock', True) else "אזל מהמלאי"
+            response.append(f"מלאי: {status}")
             
-        if product.get('sale_price'):
-            details.append(f"מחיר מבצע: ₪{product['sale_price']}")
+        if details.get('sale_price'):
+            response.append(f"מחיר מבצע: ₪{details['sale_price']}")
             
-        return "\n".join(details)
+        return "\n".join(response)
         
     except Exception as e:
         logger.error(f"Error getting product details: {e}")
@@ -461,18 +312,8 @@ def get_product_details(product_name: str) -> str:
 def get_sales() -> str:
     """Get sales data from WordPress"""
     try:
-        auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
-        }
-        
-        response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/reports/sales",
-            params=auth_params,
-            verify=False
-        )
-        response.raise_for_status()
-        data = response.json()
+        # Get sales data using settings handler
+        data = settings_handler.get_sales_data()
         
         total_sales = data.get("total_sales", 0)
         return f"סך המכירות: {total_sales} יחידות"
@@ -482,7 +323,7 @@ def get_sales() -> str:
         return f"שגיאה בקבלת נתוני המכירות: {str(e)}"
 
 # Initialize LangChain components
-llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4-0125-preview")
+llm = ChatOpenAI(api_key=config['OPENAI_API_KEY'], model="gpt-4-0125-preview")
 memory = ConversationBufferWindowMemory(
     memory_key="chat_history",
     k=5,
@@ -1033,18 +874,7 @@ def assign_product_to_categories(product_info: str) -> str:
         category_names = [name.strip() for name in parts[1].split(",")]
         
         # חיפוש המוצר
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
@@ -1344,19 +1174,8 @@ def update_product_stock(product_info: str) -> str:
         except ValueError:
             return "הכמות חייבת להיות מספר שלם"
             
-        # Find product
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        # Find product using product handler
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
@@ -1388,19 +1207,8 @@ def get_product_stock_status(product_name: str) -> str:
     - כמה יש במלאי מנעלי ספורט
     """
     try:
-        # Find product
-        auth_params = {
-            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
-            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
-        }
-        
-        search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
-            params={**auth_params, "search": product_name},
-            verify=False
-        )
-        search_response.raise_for_status()
-        products = search_response.json()
+        # Find product using product handler
+        products = product_handler.search_products(product_name)
         
         if not products:
             return f"לא נמצא מוצר בשם {product_name}"
@@ -1454,7 +1262,7 @@ def manage_product_stock_by_attributes(product_info: str) -> str:
         }
         
         search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
+            f"{config['WP_URL']}/wp-json/wc/v3/products",
             params={**auth_params, "search": product_name},
             verify=False
         )
@@ -1526,7 +1334,7 @@ def set_product_low_stock_threshold(product_info: str) -> str:
         }
         
         search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
+            f"{config['WP_URL']}/wp-json/wc/v3/products",
             params={**auth_params, "search": product_name},
             verify=False
         )
@@ -1821,17 +1629,33 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 message_id=processing_message.message_id
             )
             
-            # Get product list
-            products_list = list_products()
-            if products_list.startswith("שגיאה") or products_list == "לא נמצאו מוצרים בחנות":
-                raise Exception(products_list)
+            # Get product list using product handler
+            products = product_handler.list_products(10)
+            if not products:
+                raise Exception("לא נמצאו מוצרים בחנות")
+                
+            # Format product list
+            products_text = []
+            for p in products:
+                product_line = f"- {p['name']}: ₪{p.get('price', 'לא זמין')}"
+                
+                # Add stock information
+                if p.get('manage_stock'):
+                    stock = p.get('stock_quantity', 0)
+                    status = "במלאי" if stock > 0 else "אזל מהמלאי"
+                    product_line += f" | {status} ({stock} יחידות)"
+                else:
+                    status = "במלאי" if p.get('in_stock', True) else "אזל מהמלאי"
+                    product_line += f" | {status}"
+                    
+                products_text.append(product_line)
             
             # Show product list and ask which product this is for
             await update.message.reply_text(
                 "קיבלתי את התמונה! 📸\n\n"
                 "לאיזה מוצר להוסיף את התמונה?\n"
                 "אנא העתק את השם המדויק מהרשימה:\n\n"
-                f"{products_list}"
+                + "\n".join(products_text)
             )
             
         except Exception as e:
@@ -1869,15 +1693,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle incoming messages."""
     chat_id = update.message.chat_id
     user_message = update.message.text
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    current_time = datetime.now(timezone).strftime('%Y-%m-%d %H:%M:%S')
     
-    logger.info("="*50)
-    logger.info(f"New Message Received at {current_time}")
-    logger.info(f"Chat ID: {chat_id}")
-    logger.info(f"User: {update.message.from_user.first_name} {update.message.from_user.last_name}")
-    logger.info(f"Message: {user_message}")
-    logger.info("="*50)
-    logger.info("Processing message...")
+    user_logger.info(
+        f"New message from {update.message.from_user.first_name} "
+        f"(ID: {chat_id}): {user_message}"
+    )
 
     try:
         # Check if we have a pending photo to attach
@@ -1905,7 +1726,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 
                 # First try exact match
                 search_response = requests.get(
-                    f"{WP_URL}/wp-json/wc/v3/products",
+                    f"{config['WP_URL']}/wp-json/wc/v3/products",
                     params={**auth_params, "search": clean_name},
                     verify=False
                 )
@@ -1916,7 +1737,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if not products:
                     logger.debug("No exact match found, trying case-insensitive search")
                     all_products_response = requests.get(
-                        f"{WP_URL}/wp-json/wc/v3/products",
+                        f"{config['WP_URL']}/wp-json/wc/v3/products",
                         params={**auth_params, "per_page": 100},
                         verify=False
                     )
@@ -2056,7 +1877,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
             
     except Exception as e:
-        logger.error(f"Error processing message: {str(e)}", exc_info=True)
+        error_logger.error(
+            f"Error processing message: {str(e)}", 
+            exc_info=True
+        )
         await context.bot.send_message(
             chat_id=chat_id,
             text="מצטער, אירעה שגיאה בעיבוד הבקשה שלך. אנא נסה שוב."
@@ -2126,7 +1950,10 @@ async def test_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log Errors caused by Updates."""
-    logger.error("Exception while handling an update:", exc_info=context.error)
+    error_logger.error(
+        "Exception while handling an update:",
+        exc_info=context.error
+    )
 
     # Send message to the user
     if update and update.effective_message:
@@ -2155,7 +1982,7 @@ async def handle_product_choice(update: Update, context: ContextTypes.DEFAULT_TY
         }
         
         search_response = requests.get(
-            f"{WP_URL}/wp-json/wc/v3/products",
+            f"{config['WP_URL']}/wp-json/wc/v3/products",
             params={**auth_params, "search": product_name},
             verify=False
         )
@@ -2194,47 +2021,51 @@ async def handle_product_choice(update: Update, context: ContextTypes.DEFAULT_TY
 
 def main() -> None:
     """Start the bot."""
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Initialize handlers
-    global media_handler, coupon_handler, order_handler, category_handler, customer_handler, inventory_handler
-    
     try:
-        media_handler = MediaHandler(WP_URL, WP_USER, WP_PASSWORD)
-        coupon_handler = CouponHandler(WP_URL)
-        order_handler = OrderHandler(WP_URL)
-        category_handler = CategoryHandler(WP_URL)
-        customer_handler = CustomerHandler(WP_URL)
-        inventory_handler = InventoryHandler(WP_URL)
-        logger.info("All handlers initialized successfully")
-    except Exception as e:
-        logger.error(f"Error initializing handlers: {e}")
-        raise
-    
-    # Add conversation handler
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start),
-            MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
-        ],
-        states={
-            CHOOSING_PRODUCT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_product_choice)
+        # Create the Application and pass it your bot's token.
+        application = Application.builder().token(config['TELEGRAM_BOT_TOKEN']).build()
+        
+        # Initialize handlers
+        global media_handler, coupon_handler, order_handler, category_handler, customer_handler, inventory_handler
+        
+        media_handler = MediaHandler(config['WP_URL'], config['WP_USER'], config['WP_PASSWORD'])
+        coupon_handler = CouponHandler(config['WP_URL'])
+        order_handler = OrderHandler(config['WP_URL'])
+        category_handler = CategoryHandler(config['WP_URL'])
+        customer_handler = CustomerHandler(config['WP_URL'])
+        inventory_handler = InventoryHandler(config['WP_URL'])
+        product_handler = ProductHandler(config['WP_URL'])
+        settings_handler = SettingsHandler(config['WP_URL'])
+        
+        bot_logger.info("All handlers initialized successfully")
+        
+        # Add conversation handler
+        conv_handler = ConversationHandler(
+            entry_points=[
+                CommandHandler("start", start),
+                MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
             ],
-        },
-        fallbacks=[],
-    )
-    
-    application.add_handler(conv_handler)
-    
-    # Add error handler
-    application.add_error_handler(error_handler)
-    
-    # Start the Bot
-    logger.info("Starting bot...")
-    application.run_polling()
+            states={
+                CHOOSING_PRODUCT: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_product_choice)
+                ],
+            },
+            fallbacks=[],
+        )
+        
+        application.add_handler(conv_handler)
+        
+        # Add error handler
+        application.add_error_handler(error_handler)
+        
+        # Start the Bot
+        bot_logger.info("Starting bot...")
+        application.run_polling()
+        
+    except Exception as e:
+        error_logger.error(f"Critical error in main: {str(e)}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     main()
