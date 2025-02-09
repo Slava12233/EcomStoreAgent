@@ -1,77 +1,87 @@
 # WordPress AI Agent
 
-סוכן AI המנוהל דרך בוט בטלגרם לביצוע פעולות באתר וורדפרס באמצעות פקודות בשפה טבעית.
+בוט טלגרם לניהול חנות WooCommerce בעברית באמצעות בינה מלאכותית.
 
 ## תכונות
 
-- קבלת פקודות בשפה טבעית דרך טלגרם
-- פירוש הפקודות באמצעות LangChain ו-OpenAI
-- ביצוע פעולות באתר וורדפרס דרך REST API
-- תמיכה בפעולות:
-  - הורדת מבצעים ממוצרים
-  - עדכון מחירי מוצרים
-  - קבלת נתוני מכירות
-
-## דרישות מערכת
-
-- Python 3.8 ומעלה
-- חשבון טלגרם ובוט (דרך BotFather)
-- חשבון OpenAI עם מפתח API
-- אתר וורדפרס עם WooCommerce מותקן
+- ניהול מוצרים (הצגה, עריכה, מחיקה)
+- עדכון מחירים וניהול מבצעים
+- העלאת וניהול תמונות מוצרים
+- ניהול קופונים
+- ניהול הזמנות
+- ממשק משתמש בעברית
+- עיבוד שפה טבעית באמצעות GPT-4
 
 ## התקנה
 
 1. שכפל את המאגר:
 ```bash
-git clone <repository-url>
+git clone https://github.com/yourusername/wordpress-ai-agent.git
 cd wordpress-ai-agent
 ```
 
-2. צור סביבה וירטואלית והפעל אותה:
+2. צור והפעל סביבה וירטואלית:
 ```bash
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
+# או
+.\venv\Scripts\activate  # Windows
 ```
 
-3. התקן את הדרישות:
+3. התקן את התלויות:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. העתק את קובץ `.env.example` ל-`.env`:
+4. העתק את קובץ `.env.example` ל-`.env` ומלא את הפרטים הנדרשים:
 ```bash
 cp .env.example .env
 ```
 
-5. ערוך את קובץ `.env` והוסף את הפרטים הנדרשים:
-- `TELEGRAM_BOT_TOKEN`: אסימון הבוט מ-BotFather
-- `WP_URL`: כתובת אתר הוורדפרס שלך
-- `WP_USER`: שם משתמש לוורדפרס
-- `WP_PASSWORD`: סיסמת אפליקציה לוורדפרס
-- `OPENAI_API_KEY`: מפתח API של OpenAI
+## מבנה הפרויקט
+
+```
+wordpress-ai-agent/
+├── src/                    # קוד המקור
+│   ├── handlers/          # מחלקות הטיפול השונות
+│   │   ├── media_handler.py
+│   │   ├── coupon_handler.py
+│   │   └── order_handler.py
+│   └── main.py
+├── logs/                   # קבצי לוג
+├── temp_media/             # קבצי מדיה זמניים
+├── tests/                  # בדיקות
+├── .env                    # הגדרות
+├── .env.example           # דוגמה להגדרות
+├── requirements.txt        # תלויות
+└── README.md              # תיעוד
+```
 
 ## הפעלה
 
-הפעל את הבוט:
 ```bash
+cd src
 python main.py
 ```
 
-## שימוש
+## הגדרות נדרשות ב-.env
 
-שלח הודעות לבוט בטלגרם עם פקודות בשפה טבעית, לדוגמה:
-- "הורד את המבצע על מגני הטלפון"
-- "כמה מכרנו מהחולצות השבוע?"
-- "עדכן את המחיר של הכובעים"
+```env
+# Telegram
+TELEGRAM_BOT_TOKEN=your_bot_token
 
-הבוט יפרש את הפקודות ויבצע את הפעולות המתאימות באתר הוורדפרס.
+# WordPress
+WP_URL=https://your-store.com
+WP_USER=your_username
+WP_PASSWORD=your_password
 
-## אבטחה
+# WooCommerce
+WC_CONSUMER_KEY=your_consumer_key
+WC_CONSUMER_SECRET=your_consumer_secret
 
-- אל תשתף את קובץ `.env` או את הפרטים הרגישים שבו
-- השתמש בסיסמת אפליקציה ייעודית לוורדפרס במקום סיסמת המשתמש הראשית
-- הגבל את הגישה לבוט בטלגרם למשתמשים מורשים בלבד
+# OpenAI
+OPENAI_API_KEY=your_openai_api_key
+```
 
 ## רישיון
 

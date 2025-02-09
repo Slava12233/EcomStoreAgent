@@ -1,5 +1,42 @@
+# Environment variables
 .env
+
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environment
+venv/
 .venv/
-temp_media/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
 bot.log
+
+# Temporary files
+temp_media/
+*.tmp
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# System
+.DS_Store
+Thumbs.db

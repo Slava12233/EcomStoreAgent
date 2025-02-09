@@ -4,10 +4,11 @@ import logging
 import requests
 import pytz
 import asyncio
+import warnings
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
-from media_handler import MediaHandler
+from handlers.media_handler import MediaHandler
 from dotenv import load_dotenv
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
@@ -15,21 +16,64 @@ from langchain.agents import AgentType, Tool, initialize_agent
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import SystemMessage
 import re
-from coupon_handler import CouponHandler
+from handlers.coupon_handler import CouponHandler
+from handlers.order_handler import OrderHandler
+from langchain.callbacks.base import BaseCallbackHandler
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG,
-    handlers=[
-        logging.FileHandler('bot.log', mode='a', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# השתקת אזהרות
+warnings.filterwarnings("ignore")
+# השתקת אזהרות ספציפיות של urllib3
+import urllib3
+urllib3.disable_warnings()
+
+# יצירת תיקיית לוגים אם לא קיימת
+os.makedirs('logs', exist_ok=True)
+
+# הגדרת לוגר ראשי
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# הסרת כל ההנדלרים הקיימים
+for handler in logger.handlers[:]:
+    logger.removeHandler(handler)
+
+# הגדרת StreamHandler לשלוח רק שגיאות קריטיות לטרמינל
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.CRITICAL)
+console_handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
+logger.addHandler(console_handler)
+
+# הוספת הנדלר לקובץ עבור כל הלוגים
+log_file_path = os.path.join(os.path.dirname(__file__), 'logs', 'bot.log')
+file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8', delay=False)
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+
+# הגדרת לוגר ספציפי ל-python-telegram-bot
+telegram_logger = logging.getLogger('telegram')
+telegram_logger.setLevel(logging.INFO)
+telegram_logger.addHandler(file_handler)
+telegram_logger.propagate = False  # מניעת העברת לוגים למעלה בהיררכיה
+
+# הגדרת לוגר ספציפי ל-LangChain
+langchain_logger = logging.getLogger('langchain')
+langchain_logger.setLevel(logging.WARNING)  # רק אזהרות חשובות
+langchain_logger.addHandler(file_handler)
+langchain_logger.propagate = False
+
+# הגדרת לוגר ספציפי ל-urllib3
+urllib3_logger = logging.getLogger('urllib3')
+urllib3_logger.setLevel(logging.WARNING)  # רק אזהרות חשובות
+urllib3_logger.addHandler(file_handler)
+urllib3_logger.propagate = False
 
 # Add initial log entry to verify logging is working
-logger.info("Bot logging initialized")
+current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+logger.info("="*50)
+logger.info(f"Bot Started at {current_time}")
+logger.info(f"Log file location: {log_file_path}")
+logger.info("="*50)
 
 # Load environment variables
 load_dotenv()
@@ -51,6 +95,7 @@ if not all([WP_URL, WP_USER, WP_PASSWORD, OPENAI_API_KEY]):
 # Initialize MediaHandler
 media_handler = MediaHandler(WP_URL, WP_USER, WP_PASSWORD)
 coupon_handler = CouponHandler(WP_URL)
+order_handler = OrderHandler(WP_URL)
 
 # Set timezone
 timezone = pytz.timezone('Asia/Jerusalem')
@@ -77,8 +122,22 @@ def list_products(_: str = "") -> str:
         if not products:
             return "לא נמצאו מוצרים בחנות"
             
-        products_text = "\n".join([f"- {p['name']}: ₪{p.get('price', 'לא זמין')}" for p in products])
-        return f"המוצרים בחנות:\n{products_text}"
+        products_text = []
+        for p in products:
+            product_line = f"- {p['name']}: ₪{p.get('price', 'לא זמין')}"
+            
+            # Add stock information
+            if p.get('manage_stock'):
+                stock = p.get('stock_quantity', 0)
+                status = "במלאי" if stock > 0 else "אזל מהמלאי"
+                product_line += f" | {status} ({stock} יחידות)"
+            else:
+                status = "במלאי" if p.get('in_stock', True) else "אזל מהמלאי"
+                product_line += f" | {status}"
+                
+            products_text.append(product_line)
+            
+        return f"המוצרים בחנות:\n" + "\n".join(products_text)
         
     except Exception as e:
         logger.error(f"Error listing products: {e}")
@@ -100,8 +159,8 @@ def update_price(product_info: str) -> str:
         percentage_match = re.match(r'^-?(\d+)%$', price_info)
         
         auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
         }
         
         # Search for product
@@ -154,8 +213,8 @@ def remove_discount(product_name: str) -> str:
     """Remove discount from a product"""
     try:
         auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
         }
         
         # Search for product
@@ -206,8 +265,8 @@ def create_product(product_info: str) -> str:
         stock_quantity = int(parts[3].strip()) if len(parts) > 3 else None
         
         auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
         }
         
         # Prepare product data
@@ -251,8 +310,8 @@ def edit_product(product_info: str) -> str:
         new_value = parts[2].strip()
         
         auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
         }
         
         # Search for product
@@ -309,8 +368,8 @@ def delete_product(product_name: str) -> str:
     """Delete a product from WordPress"""
     try:
         auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
         }
         
         # Search for product
@@ -345,8 +404,8 @@ def get_product_details(product_name: str) -> str:
     """Get detailed information about a product"""
     try:
         auth_params = {
-            'consumer_key': WP_USER,
-            'consumer_secret': WP_PASSWORD
+            'consumer_key': os.getenv('WC_CONSUMER_KEY'),
+            'consumer_secret': os.getenv('WC_CONSUMER_SECRET')
         }
         
         # Search for product
@@ -595,6 +654,226 @@ def delete_coupon(code: str) -> str:
         logger.error(f"Error deleting coupon: {e}")
         return f"שגיאה במחיקת הקופון: {str(e)}"
 
+def list_orders(status: str = "") -> str:
+    """Get list of orders with optional status filter"""
+    try:
+        orders = order_handler.list_orders(status=status if status else None)
+        
+        if not orders:
+            return "אין הזמנות במערכת"
+            
+        orders_text = []
+        for order in orders:
+            status_hebrew = {
+                'pending': 'ממתין לתשלום',
+                'processing': 'בטיפול',
+                'on-hold': 'בהמתנה',
+                'completed': 'הושלם',
+                'cancelled': 'בוטל',
+                'refunded': 'זוכה',
+                'failed': 'נכשל'
+            }.get(order['status'], order['status'])
+            
+            total = order.get('total', '0')
+            date = order.get('date_created', '').split('T')[0]
+            order_text = f"#{order['id']}: {status_hebrew} | ₪{total} | {date}"
+            
+            # Add customer name if available
+            if order.get('billing') and order['billing'].get('first_name'):
+                customer = f"{order['billing']['first_name']} {order['billing']['last_name']}"
+                order_text += f" | {customer}"
+            
+            orders_text.append(order_text)
+            
+        return "ההזמנות במערכת:\n" + "\n".join(orders_text)
+        
+    except Exception as e:
+        logger.error(f"Error listing orders: {e}")
+        return f"שגיאה בהצגת ההזמנות: {str(e)}"
+
+def get_order_details(order_id: str) -> str:
+    """Get detailed information about a specific order"""
+    try:
+        # Convert order_id to int
+        order_id = int(order_id)
+        order = order_handler.get_order_details(order_id)
+        
+        # Format billing details
+        billing = order.get('billing', {})
+        shipping = order.get('shipping', {})
+        
+        details = [
+            f"הזמנה #{order['id']}",
+            f"סטטוס: {order.get('status', 'לא ידוע')}",
+            f"תאריך: {order.get('date_created', '').split('T')[0]}",
+            f"סה\"כ: ₪{order.get('total', '0')}",
+            "\nפרטי לקוח:",
+            f"שם: {billing.get('first_name', '')} {billing.get('last_name', '')}",
+            f"טלפון: {billing.get('phone', 'לא צוין')}",
+            f"אימייל: {billing.get('email', 'לא צוין')}",
+            "\nכתובת למשלוח:",
+            f"{shipping.get('address_1', '')}",
+            f"{shipping.get('city', '')}, {shipping.get('postcode', '')}"
+        ]
+        
+        # Add line items
+        details.append("\nפריטים:")
+        for item in order.get('line_items', []):
+            details.append(f"- {item.get('name', '')}: {item.get('quantity', 0)} יח' × ₪{item.get('price', '0')}")
+        
+        # Add notes if any
+        notes = order_handler.get_order_notes(order_id)
+        if notes:
+            details.append("\nהערות:")
+            for note in notes:
+                if not note.get('customer_note', False):  # Show only admin notes
+                    details.append(f"- {note.get('note', '')}")
+        
+        return "\n".join(details)
+        
+    except Exception as e:
+        logger.error(f"Error getting order details: {e}")
+        return f"שגיאה בהצגת פרטי ההזמנה: {str(e)}"
+
+def update_order_status(order_info: str) -> str:
+    """Update order status"""
+    try:
+        # Parse order info - format: "order_id status"
+        parts = order_info.strip().split()
+        if len(parts) < 2:
+            return "נדרש מזהה הזמנה וסטטוס חדש"
+            
+        order_id = int(parts[0])
+        status = parts[1].lower()
+        
+        # Update status
+        order = order_handler.update_order_status(order_id, status)
+        
+        status_hebrew = {
+            'pending': 'ממתין לתשלום',
+            'processing': 'בטיפול',
+            'on-hold': 'בהמתנה',
+            'completed': 'הושלם',
+            'cancelled': 'בוטל',
+            'refunded': 'זוכה',
+            'failed': 'נכשל'
+        }.get(status, status)
+        
+        return f"סטטוס ההזמנה #{order_id} עודכן ל-{status_hebrew}"
+        
+    except ValueError as ve:
+        logger.error(f"Invalid order status: {ve}")
+        return f"סטטוס לא חוקי: {str(ve)}"
+    except Exception as e:
+        logger.error(f"Error updating order status: {e}")
+        return f"שגיאה בעדכון סטטוס ההזמנה: {str(e)}"
+
+def search_orders(search_info: str) -> str:
+    """Search orders by various parameters"""
+    try:
+        # Parse search info - format: "field:value"
+        if ':' not in search_info:
+            # Treat as general search term
+            orders = order_handler.search_orders(search_term=search_info)
+        else:
+            field, value = search_info.split(':', 1)
+            field = field.strip().lower()
+            value = value.strip()
+            
+            # Prepare search parameters
+            search_params = {}
+            if field == 'לקוח':
+                search_params['customer_id'] = int(value)
+            elif field == 'סטטוס':
+                search_params['status'] = value.lower()
+            elif field == 'תאריך':
+                if '-' in value:
+                    date_from, date_to = value.split('-')
+                    search_params['date_from'] = date_from.strip()
+                    search_params['date_to'] = date_to.strip()
+                else:
+                    search_params['date_from'] = value
+                    search_params['date_to'] = value
+            else:
+                return "שדה חיפוש לא חוקי. אפשרויות: לקוח, סטטוס, תאריך"
+            
+            orders = order_handler.search_orders(**search_params)
+        
+        if not orders:
+            return "לא נמצאו הזמנות מתאימות"
+            
+        # Format results similar to list_orders
+        orders_text = []
+        for order in orders:
+            status_hebrew = {
+                'pending': 'ממתין לתשלום',
+                'processing': 'בטיפול',
+                'on-hold': 'בהמתנה',
+                'completed': 'הושלם',
+                'cancelled': 'בוטל',
+                'refunded': 'זוכה',
+                'failed': 'נכשל'
+            }.get(order['status'], order['status'])
+            
+            total = order.get('total', '0')
+            date = order.get('date_created', '').split('T')[0]
+            customer = f"{order['billing']['first_name']} {order['billing']['last_name']}" if order.get('billing') else "לא צוין"
+            
+            orders_text.append(f"#{order['id']}: {status_hebrew} | ₪{total} | {date} | {customer}")
+            
+        return "תוצאות החיפוש:\n" + "\n".join(orders_text)
+        
+    except Exception as e:
+        logger.error(f"Error searching orders: {e}")
+        return f"שגיאה בחיפוש הזמנות: {str(e)}"
+
+def create_order(order_info: str) -> str:
+    """Create a new order"""
+    try:
+        # Parse order info from string format
+        # Expected format: first_name | last_name | email | phone | address | city | postcode | product_id:quantity,product_id:quantity
+        parts = order_info.strip().split("|")
+        if len(parts) < 8:
+            return "נדרשים כל הפרטים: שם פרטי | שם משפחה | אימייל | טלפון | כתובת | עיר | מיקוד | מוצרים"
+            
+        # Parse customer data
+        customer_data = {
+            "first_name": parts[0].strip(),
+            "last_name": parts[1].strip(),
+            "email": parts[2].strip(),
+            "phone": parts[3].strip(),
+            "address_1": parts[4].strip(),
+            "city": parts[5].strip(),
+            "postcode": parts[6].strip()
+        }
+        
+        # Parse items
+        items_str = parts[7].strip()
+        items = []
+        for item in items_str.split(","):
+            if ":" not in item:
+                return "פורמט מוצרים לא תקין. נדרש: מזהה_מוצר:כמות,מזהה_מוצר:כמות"
+            product_id, quantity = item.split(":")
+            items.append({
+                "product_id": int(product_id),
+                "quantity": int(quantity)
+            })
+        
+        # Add shipping method if specified
+        shipping_method = parts[8].strip() if len(parts) > 8 else None
+        
+        # Create order
+        order = order_handler.create_order(customer_data, items, shipping_method)
+        
+        return f"ההזמנה נוצרה בהצלחה! מספר הזמנה: #{order['id']}"
+        
+    except ValueError as ve:
+        logger.error(f"Invalid value in create_order: {str(ve)}")
+        return f"ערך לא תקין: {str(ve)}"
+    except Exception as e:
+        logger.error(f"Error creating order: {str(e)}")
+        return f"שגיאה ביצירת ההזמנה: {str(e)}"
+
 # Define tools
 tools = [
     Tool(
@@ -656,17 +935,80 @@ tools = [
         name="delete_coupon",
         func=delete_coupon,
         description="מוחק קופון מהחנות. מקבל את קוד הקופון"
+    ),
+    Tool(
+        name="list_orders",
+        func=list_orders,
+        description="מציג את רשימת ההזמנות. ניתן לסנן לפי סטטוס"
+    ),
+    Tool(
+        name="get_order_details",
+        func=get_order_details,
+        description="מציג פרטים מלאים על הזמנה ספציפית. מקבל מזהה הזמנה"
+    ),
+    Tool(
+        name="update_order_status",
+        func=update_order_status,
+        description="מעדכן סטטוס הזמנה. פורמט: מזהה_הזמנה סטטוס_חדש"
+    ),
+    Tool(
+        name="search_orders",
+        func=search_orders,
+        description="מחפש הזמנות לפי פרמטרים שונים. פורמט: שדה:ערך (למשל: סטטוס:completed, לקוח:123, תאריך:2024-03-01)"
+    ),
+    Tool(
+        name="create_order",
+        func=create_order,
+        description="יוצר הזמנה חדשה. פורמט: שם_פרטי | שם_משפחה | אימייל | טלפון | כתובת | עיר | מיקוד | מזהה_מוצר:כמות,מזהה_מוצר:כמות | [שיטת_משלוח]"
     )
 ]
 
-# Initialize agent
+# הגדרת לוגר ייעודי ל-agent
+agent_logger = logging.getLogger('agent')
+agent_logger.setLevel(logging.INFO)
+agent_logger.addHandler(file_handler)
+agent_logger.propagate = False
+
+class AgentCallbackHandler(BaseCallbackHandler):
+    """Handler for logging agent events to file."""
+    
+    def on_chain_start(self, serialized: dict, inputs: dict, **kwargs) -> None:
+        """Log when chain starts running."""
+        agent_logger.info(f"Starting chain with inputs: {inputs}")
+
+    def on_chain_end(self, outputs: dict, **kwargs) -> None:
+        """Log when chain ends running."""
+        agent_logger.info(f"Chain finished with outputs: {outputs}")
+
+    def on_chain_error(self, error: Exception, **kwargs) -> None:
+        """Log when chain errors."""
+        agent_logger.error(f"Chain error: {str(error)}")
+
+    def on_tool_start(self, serialized: dict, input_str: str, **kwargs) -> None:
+        """Log when tool starts running."""
+        agent_logger.info(f"Starting tool {serialized.get('name', 'unknown')} with input: {input_str}")
+
+    def on_tool_end(self, output: str, **kwargs) -> None:
+        """Log when tool ends running."""
+        agent_logger.info(f"Tool finished with output: {output}")
+
+    def on_tool_error(self, error: Exception, **kwargs) -> None:
+        """Log when tool errors."""
+        agent_logger.error(f"Tool error: {str(error)}")
+
+    def on_text(self, text: str, **kwargs) -> None:
+        """Log any text."""
+        agent_logger.info(text)
+
+# Initialize agent with proper callback handler
 agent = initialize_agent(
     tools,
     llm,
     agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
     memory=memory,
-    verbose=True,
+    verbose=False,
     handle_parsing_errors=True,
+    callbacks=[AgentCallbackHandler()],
     system_message=SystemMessage(content="""אתה עוזר וירטואלי שמנהל חנות וורדפרס. 
     אתה יכול לעזור למשתמש בכל הקשור לניהול החנות - הצגת מוצרים, שינוי מחירים, הורדת מבצעים ובדיקת נתוני מכירות.
     אתה מבין עברית ויכול לבצע פעולות מורכבות כמו שינוי מחירים באחוזים.
@@ -678,14 +1020,20 @@ agent = initialize_agent(
     תמיד ענה בעברית ובצורה ידידותית.""")
 )
 
+# הסרת callback מיותר
+agent.callbacks = None
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming photos."""
     chat_id = update.message.chat_id
+    logger.info(f"=== New Photo ===")
+    logger.info(f"Chat ID: {chat_id}")
+    logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     try:
         # Get the largest photo size
         photo = update.message.photo[-1]
-        logger.debug(f"Received photo with file_id: {photo.file_id}")
+        logger.info(f"Photo details - File ID: {photo.file_id}, Size: {photo.file_size} bytes")
         
         # Send processing message
         processing_message = await context.bot.send_message(
@@ -759,17 +1107,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle incoming messages."""
     chat_id = update.message.chat_id
     user_message = update.message.text
-    logger.info(f"Received message from {chat_id}: {user_message}")
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    logger.info("="*50)
+    logger.info(f"New Message Received at {current_time}")
+    logger.info(f"Chat ID: {chat_id}")
+    logger.info(f"User: {update.message.from_user.first_name} {update.message.from_user.last_name}")
+    logger.info(f"Message: {user_message}")
+    logger.info("="*50)
+    logger.info("Processing message...")
 
     try:
         # Check if we have a pending photo to attach
         if 'temp_photos' in context.user_data and context.user_data['temp_photos']:
-            logger.debug("Processing photo attachment request")
+            logger.info("Found pending photo to attach")
             # Send processing message
             processing_message = await context.bot.send_message(
                 chat_id=chat_id,
                 text="🔄 מעבד את התמונה...\nאנא המתן מספר שניות"
             )
+            logger.info("Sent processing message")
 
             try:
                 # First verify the product exists
@@ -945,30 +1302,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message when the command /start is issued."""
-    welcome_message = (
-        "שלום! אני בוט שיכול לעזור לך לנהל את אתר הוורדפרס שלך.\n"
-        "אתה יכול לבקש ממני דברים כמו:\n\n"
-        "ניהול מוצרים:\n"
-        "- הצג את רשימת המוצרים\n"
-        "- הצג פרטים מלאים על מוצר\n"
-        "- צור מוצר חדש (שם | תיאור | מחיר | כמות במלאי)\n"
-        "- ערוך פרטי מוצר (שם | שדה לעריכה | ערך חדש)\n"
-        "- מחק מוצר\n\n"
-        "מחירים ומבצעים:\n"
-        "- שנה את המחיר של מוצר\n"
-        "- הורד/העלה מחיר באחוזים\n"
-        "- הסר מבצע ממוצר\n\n"
-        "ניהול תמונות:\n"
-        "- שלח תמונה ובחר לאיזה מוצר לשייך אותה\n"
-        "- מחק תמונה ממוצר\n\n"
-        "ניהול קופונים:\n"
-        "- צור קופון חדש (קוד | סוג | סכום)\n"
-        "- הצג את כל הקופונים\n"
-        "- ערוך קופון קיים\n"
-        "- מחק קופון\n\n"
-        "מידע:\n"
-        "- הצג נתוני מכירות"
-    )
+    logger.info(f"=== New User Started Bot ===")
+    logger.info(f"Chat ID: {update.message.chat_id}")
+    logger.info(f"User: {update.message.from_user.first_name} {update.message.from_user.last_name}")
+    logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    welcome_message = """ברוכים הבאים לבוט ניהול החנות!
+אני יכול לעזור לך עם המשימות הבאות:
+
+📦 ניהול מוצרים:
+- הצגת רשימת מוצרים
+- עדכון מחירים
+- הסרת הנחות ממוצרים
+
+🖼️ ניהול תמונות:
+- העלאת תמונות למוצרים
+- מחיקת תמונות ממוצרים
+
+🎫 ניהול קופונים:
+- יצירת קופון חדש
+- הצגת רשימת קופונים
+- עדכון פרטי קופון
+- מחיקת קופון
+
+📋 ניהול הזמנות:
+- יצירת הזמנה חדשה
+- הצגת רשימת הזמנות
+- צפייה בפרטי הזמנה
+- עדכון סטטוס הזמנה
+- חיפוש הזמנות לפי פרמטרים שונים (תאריך, לקוח, סטטוס)
+
+לדוגמה, ליצירת הזמנה חדשה:
+צור הזמנה חדשה: שם_פרטי | שם_משפחה | אימייל | טלפון | כתובת | עיר | מיקוד | מזהה_מוצר:כמות
+
+אשמח לעזור! פשוט תגיד/י לי מה צריך 😊"""
     await update.message.reply_text(welcome_message)
 
 async def test_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -996,9 +1362,21 @@ async def test_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.error(f"Error in test_image_upload: {e}")
         await update.message.reply_text(f"שגיאה בבדיקת העלאת תמונות: {str(e)}")
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log Errors caused by Updates."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    # Send message to the user
+    if update and update.effective_message:
+        await update.effective_message.reply_text(
+            "מצטער, אירעה שגיאה בעיבוד הבקשה שלך. אנא נסה שוב."
+        )
+
 def main() -> None:
     """Start the bot."""
-    logger.info("Initializing bot...")
+    # הודעה בטרמינל שהבוט התחיל לרוץ
+    print("\nBot is running... Press Ctrl+C to stop")
+    print(f"Logs are being written to: {log_file_path}\n")
     
     # Create the Application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -1008,7 +1386,10 @@ def main() -> None:
     application.add_handler(CommandHandler("test_image", test_image_upload))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
+    
+    # Add error handler
+    application.add_error_handler(error_handler)
+    
     # Start the Bot
     logger.info("Starting bot...")
     application.run_polling()
