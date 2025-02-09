@@ -104,30 +104,17 @@ wordpress-ai-agent/
 
 The bot uses a comprehensive logging system:
 - `logs/bot.log`: General operation logs
-- `logs/debug.log`: Detailed debug information
+- `logs/debug.log`: Detailed debug information, including LLM communication
+- `logs/user_actions.log`: User interaction logs
+- `logs/errors.log`: Error tracking and debugging
 - Console output: Warnings and errors only
+
+Features:
+- Automatic log rotation (5MB max size, 5 backup files)
+- Detailed LLM communication tracking
+- Suppressed external library logs
+- Clean console output
 
 ## Development
 
 - Follow the guidelines in `.cursorrules`
-- Use the virtual environment
-- Test changes thoroughly
-- Keep documentation updated
-
-## Security
-
-- Store credentials in `.env`
-- Use WordPress application passwords
-- Implement proper error handling
-- Monitor logs for suspicious activity
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 

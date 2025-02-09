@@ -43,21 +43,66 @@ class ProductHandler:
     def create_product(self, name: str, description: str, regular_price: str, stock_quantity: Optional[int] = None) -> Dict:
         """יצירת מוצר חדש"""
         try:
+            # וידוא שכל הפרמטרים הנדרשים קיימים
+            if not name or not regular_price:
+                raise ValueError("Name and price are required")
+
+            logger.debug(f"Creating product with name: {name}, price: {regular_price}, stock: {stock_quantity}")
+            
+            # וידוא שהמחיר הוא מחרוזת והסרת סימני שקל אם יש
+            regular_price = str(regular_price).replace('₪', '').replace('שח', '').strip()
+            
+            # בניית נתוני המוצר
             product_data = {
                 "name": name,
-                "description": description,
+                "type": "simple",
                 "regular_price": regular_price,
+                "description": description,
+                "short_description": description[:100] if description else name,
+                "categories": [],
+                "images": [],
                 "status": "publish"
             }
             
+            # הוספת נתוני מלאי אם יש
             if stock_quantity is not None:
-                product_data["manage_stock"] = True
-                product_data["stock_quantity"] = stock_quantity
+                product_data.update({
+                    "manage_stock": True,
+                    "stock_quantity": stock_quantity,
+                    "stock_status": "instock",
+                    "backorders": "no",
+                    "backorders_allowed": False
+                })
                 
+            logger.debug(f"Sending product data to WooCommerce: {product_data}")
+            
+            # שליחת הבקשה ל-WooCommerce
             response = self.wcapi.post("products", product_data)
+            
+            # לוג מפורט של התגובה
+            logger.debug(f"WooCommerce API response status: {response.status_code}")
+            logger.debug(f"WooCommerce API response headers: {response.headers}")
+            logger.debug(f"WooCommerce API response content: {response.text}")
+            
+            # בדיקת הצלחה
             if response.status_code != 201:
-                raise Exception(f"Failed to create product: {response.text}")
-            return response.json()
+                error_msg = f"Failed to create product. Status: {response.status_code}, Response: {response.text}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+                
+            # המרת התגובה ל-JSON
+            response_data = response.json()
+            
+            # וידוא שהמוצר נוצר בהצלחה
+            if not response_data.get('id'):
+                raise Exception("Product created but no ID returned")
+                
+            logger.info(f"Product created successfully with ID: {response_data.get('id')}")
+            return response_data
+            
+        except ValueError as e:
+            logger.error(f"Validation error creating product: {str(e)}")
+            raise
         except Exception as e:
             logger.error(f"Error creating product: {str(e)}")
             raise

@@ -33,39 +33,61 @@ def setup_logger(name: str = None, level: str = "INFO") -> logging.Logger:
         '%(levelname)s: %(message)s'
     )
     
-    # File handler with rotation - for all levels
-    file_handler = RotatingFileHandler(
-        f'logs/bot.log',
-        maxBytes=5*1024*1024,  # 5MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(file_formatter)
-    file_handler.setLevel(logging.DEBUG)
+    # Create handlers for different log types
+    handlers = {
+        'bot': RotatingFileHandler(
+            'logs/bot.log',
+            maxBytes=5*1024*1024,  # 5MB
+            backupCount=5,
+            encoding='utf-8'
+        ),
+        'debug': RotatingFileHandler(
+            'logs/debug.log',
+            maxBytes=5*1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        ),
+        'user': RotatingFileHandler(
+            'logs/user_actions.log',
+            maxBytes=5*1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        ),
+        'error': RotatingFileHandler(
+            'logs/errors.log',
+            maxBytes=5*1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        ),
+        'console': logging.StreamHandler()
+    }
     
-    # Debug file handler - for DEBUG level only
-    debug_handler = RotatingFileHandler(
-        f'logs/debug.log',
-        maxBytes=5*1024*1024,  # 5MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    debug_handler.setFormatter(file_formatter)
-    debug_handler.setLevel(logging.DEBUG)
+    # Configure handlers
+    for handler in handlers.values():
+        handler.setFormatter(file_formatter if isinstance(handler, RotatingFileHandler) else console_formatter)
     
-    # Console handler - for WARNING and above only
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(console_formatter)
-    console_handler.setLevel(logging.WARNING)
+    # Set levels
+    handlers['bot'].setLevel(logging.INFO)
+    handlers['debug'].setLevel(logging.DEBUG)
+    handlers['user'].setLevel(logging.INFO)
+    handlers['error'].setLevel(logging.ERROR)
+    handlers['console'].setLevel(logging.WARNING)
     
     # Add handlers
-    logger.addHandler(file_handler)
-    logger.addHandler(debug_handler)
-    logger.addHandler(console_handler)
+    for handler in handlers.values():
+        logger.addHandler(handler)
     
     # Disable other loggers
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
     logging.getLogger('telegram').setLevel(logging.WARNING)
+    logging.getLogger('openai').setLevel(logging.WARNING)
+    logging.getLogger('langchain').setLevel(logging.WARNING)
     
-    return logger 
+    return logger
+
+# Create dedicated loggers
+bot_logger = setup_logger('bot_events')
+user_logger = setup_logger('user_actions')
+error_logger = setup_logger('errors')
+debug_logger = setup_logger('debug') 

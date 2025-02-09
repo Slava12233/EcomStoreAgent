@@ -27,6 +27,7 @@ from langchain.schema import SystemMessage
 import re
 from langchain.callbacks.base import BaseCallbackHandler
 from typing import List, Dict, Optional
+from utils.logger import bot_logger, user_logger, error_logger, debug_logger
 
 # השתקת אזהרות
 warnings.filterwarnings("ignore")
@@ -173,25 +174,26 @@ def remove_discount(product_name: str) -> str:
 def create_product(product_info: str) -> str:
     """Create a new product in WordPress"""
     try:
-        # Parse product info
-        lines = product_info.strip().split('\n')
-        if len(lines) < 2:
-            return "נדרש לפחות שם מוצר ומחיר"
+        # Parse product info from string format
+        # Expected format: name | description | regular_price | [stock_quantity]
+        parts = product_info.strip().split("|")
+        if len(parts) < 3:
+            return "נדרש לפחות: שם מוצר | תיאור | מחיר"
             
-        name = lines[0]
-        price = lines[1]
-        description = lines[2] if len(lines) > 2 else ""
-        stock = int(lines[3]) if len(lines) > 3 and lines[3].isdigit() else None
+        name = parts[0].strip()
+        description = parts[1].strip()
+        regular_price = parts[2].strip()
+        stock_quantity = int(parts[3].strip()) if len(parts) > 3 else None
         
-        # Create product
-        new_product = product_handler.create_product(
+        # Create product using the handler
+        product = product_handler.create_product(
             name=name,
             description=description,
-            regular_price=price,
-            stock_quantity=stock
+            regular_price=regular_price,
+            stock_quantity=stock_quantity
         )
         
-        return f"המוצר {new_product['name']} נוצר בהצלחה"
+        return f"המוצר {name} נוצר בהצלחה"
         
     except Exception as e:
         logger.error(f"Error creating product: {e}")
@@ -1887,41 +1889,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a welcome message when the command /start is issued."""
-    logger.info(f"=== New User Started Bot ===")
-    logger.info(f"Chat ID: {update.message.chat_id}")
-    logger.info(f"User: {update.message.from_user.first_name} {update.message.from_user.last_name}")
-    logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    welcome_message = """ברוכים הבאים לבוט ניהול החנות!
-אני יכול לעזור לך עם המשימות הבאות:
-
-📦 ניהול מוצרים:
-- הצגת רשימת מוצרים
-- עדכון מחירים
-- הסרת הנחות ממוצרים
-
-🖼️ ניהול תמונות:
-- העלאת תמונות למוצרים
-- מחיקת תמונות ממוצרים
-
-🎫 ניהול קופונים:
-- יצירת קופון חדש
-- הצגת רשימת קופונים
-- עדכון פרטי קופון
-- מחיקת קופון
-
-📋 ניהול הזמנות:
-- יצירת הזמנה חדשה
-- הצגת רשימת הזמנות
-- צפייה בפרטי הזמנה
-- עדכון סטטוס הזמנה
-- חיפוש הזמנות לפי פרמטרים שונים (תאריך, לקוח, סטטוס)
-
-לדוגמה, ליצירת הזמנה חדשה:
-צור הזמנה חדשה: שם_פרטי | שם_משפחה | אימייל | טלפון | כתובת | עיר | מיקוד | מזהה_מוצר:כמות
-
-אשמח לעזור! פשוט תגיד/י לי מה צריך 😊"""
-    await update.message.reply_text(welcome_message)
+    """שליחת הודעת פתיחה כשמשתמש מתחיל להשתמש בבוט"""
+    bot_logger.info("=== New User Started Bot ===")
+    user = update.effective_user
+    bot_logger.info(f"Chat ID: {update.effective_chat.id}")
+    bot_logger.info(f"User: {user.first_name} {user.last_name}")
+    bot_logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    await update.message.reply_text(
+        f"שלום {user.first_name}! אני הבוט לניהול חנות WooCommerce שלך.\n"
+        "אני יכול לעזור לך בניהול מוצרים, הזמנות, לקוחות ועוד.\n"
+        "פשוט כתוב/י לי מה את/ה רוצה לעשות בשפה טבעית."
+    )
 
 async def test_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Test image upload functionality"""
