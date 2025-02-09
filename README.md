@@ -1,88 +1,133 @@
 # WordPress AI Agent
 
-בוט טלגרם לניהול חנות WooCommerce בעברית באמצעות בינה מלאכותית.
+A Telegram bot that enables natural language management of a WooCommerce WordPress store in Hebrew.
 
-## תכונות
+## Features
 
-- ניהול מוצרים (הצגה, עריכה, מחיקה)
-- עדכון מחירים וניהול מבצעים
-- העלאת וניהול תמונות מוצרים
-- ניהול קופונים
-- ניהול הזמנות
-- ממשק משתמש בעברית
-- עיבוד שפה טבעית באמצעות GPT-4
+- 🤖 Natural language processing in Hebrew
+- 🏪 Complete WooCommerce integration
+- 📦 Product management
+- 🛍️ Order processing
+- 👥 Customer management
+- 🏷️ Coupon handling
+- 📁 Category organization
+- 📊 Inventory tracking
+- 🚢 Shipping management (coming soon)
+- ⚙️ Store settings (coming soon)
 
-## התקנה
+See [CAPABILITIES.md](CAPABILITIES.md) for a detailed feature list.
 
-1. שכפל את המאגר:
+## Requirements
+
+- Python 3.8+
+- WordPress site with WooCommerce
+- Telegram Bot Token (from BotFather)
+- OpenAI API Key
+- WooCommerce API credentials
+
+## Installation
+
+1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/wordpress-ai-agent.git
 cd wordpress-ai-agent
 ```
 
-2. צור והפעל סביבה וירטואלית:
+2. Create a virtual environment:
 ```bash
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-# או
-.\venv\Scripts\activate  # Windows
+venv\Scripts\activate     # Windows
 ```
 
-3. התקן את התלויות:
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. העתק את קובץ `.env.example` ל-`.env` ומלא את הפרטים הנדרשים:
-```bash
-cp .env.example .env
+4. Create `.env` file with your credentials:
+```env
+TELEGRAM_BOT_TOKEN=your_bot_token
+OPENAI_API_KEY=your_openai_key
+WP_URL=your_wordpress_url
+WP_USER=your_wordpress_username
+WP_PASSWORD=your_wordpress_password
+WC_CONSUMER_KEY=your_woocommerce_key
+WC_CONSUMER_SECRET=your_woocommerce_secret
 ```
 
-## מבנה הפרויקט
+## Usage
+
+1. Start the bot:
+```bash
+python src/main.py
+```
+
+2. Open Telegram and search for your bot
+
+3. Send `/start` to see available commands
+
+4. Try some example commands:
+- "הצג את רשימת המוצרים"
+- "עדכן מחיר למוצר X ל-100 שקלים"
+- "צור קופון הנחה של 20 אחוז"
+- "מה המכירות שלי"
+
+## Project Structure
 
 ```
 wordpress-ai-agent/
-├── src/                    # קוד המקור
-│   ├── handlers/          # מחלקות הטיפול השונות
+├── src/
+│   ├── handlers/
 │   │   ├── media_handler.py
 │   │   ├── coupon_handler.py
-│   │   └── order_handler.py
+│   │   ├── order_handler.py
+│   │   ├── category_handler.py
+│   │   ├── customer_handler.py
+│   │   ├── inventory_handler.py
+│   │   ├── product_handler.py
+│   │   └── settings_handler.py
+│   ├── utils/
+│   │   ├── logger.py
+│   │   └── config.py
 │   └── main.py
-├── logs/                   # קבצי לוג
-├── temp_media/             # קבצי מדיה זמניים
-├── tests/                  # בדיקות
-├── .env                    # הגדרות
-├── .env.example           # דוגמה להגדרות
-├── requirements.txt        # תלויות
-└── README.md              # תיעוד
+├── logs/
+│   ├── bot.log
+│   └── debug.log
+├── .env
+├── requirements.txt
+├── README.md
+└── CAPABILITIES.md
 ```
 
-## הפעלה
+## Logging
 
-```bash
-cd src
-python main.py
-```
+The bot uses a comprehensive logging system:
+- `logs/bot.log`: General operation logs
+- `logs/debug.log`: Detailed debug information
+- Console output: Warnings and errors only
 
-## הגדרות נדרשות ב-.env
+## Development
 
-```env
-# Telegram
-TELEGRAM_BOT_TOKEN=your_bot_token
+- Follow the guidelines in `.cursorrules`
+- Use the virtual environment
+- Test changes thoroughly
+- Keep documentation updated
 
-# WordPress
-WP_URL=https://your-store.com
-WP_USER=your_username
-WP_PASSWORD=your_password
+## Security
 
-# WooCommerce
-WC_CONSUMER_KEY=your_consumer_key
-WC_CONSUMER_SECRET=your_consumer_secret
+- Store credentials in `.env`
+- Use WordPress application passwords
+- Implement proper error handling
+- Monitor logs for suspicious activity
 
-# OpenAI
-OPENAI_API_KEY=your_openai_api_key
-```
+## Contributing
 
-## רישיון
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
-MIT License 
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 
