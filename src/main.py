@@ -57,14 +57,20 @@ file_handler = logging.FileHandler(os.path.join(log_dir, 'agent.log'), encoding=
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
 # Initialize handlers
-media_handler = MediaHandler(config['WP_URL'], config['WP_USER'], config['WP_PASSWORD'])
-coupon_handler = CouponHandler(config['WP_URL'])
-order_handler = OrderHandler(config['WP_URL'])
-category_handler = CategoryHandler(config['WP_URL'])
-customer_handler = CustomerHandler(config['WP_URL'])
-inventory_handler = InventoryHandler(config['WP_URL'])
-product_handler = ProductHandler(config['WP_URL'])
-settings_handler = SettingsHandler(config['WP_URL'])
+def init_handlers():
+    """אתחול כל ההנדלרים של המערכת"""
+    global media_handler, coupon_handler, order_handler, category_handler, customer_handler, inventory_handler, product_handler, settings_handler
+    
+    media_handler = MediaHandler(config['WP_URL'], config['WP_USER'], config['WP_PASSWORD'])
+    coupon_handler = CouponHandler(config['WP_URL'])
+    order_handler = OrderHandler(config['WP_URL'])
+    category_handler = CategoryHandler(config['WP_URL'])
+    customer_handler = CustomerHandler(config['WP_URL'])
+    inventory_handler = InventoryHandler(config['WP_URL'])
+    product_handler = ProductHandler(config['WP_URL'])
+    settings_handler = SettingsHandler(config['WP_URL'])
+    
+    bot_logger.info("All handlers initialized successfully")
 
 # Set timezone
 timezone = pytz.timezone('Asia/Jerusalem')
@@ -174,28 +180,103 @@ def create_product(product_info: str) -> str:
     """Create a new product in WordPress"""
     try:
         # Parse product info
-        lines = product_info.strip().split('\n')
-        if len(lines) < 2:
-            return "נדרש לפחות שם מוצר ומחיר"
-            
-        name = lines[0]
-        price = lines[1]
-        description = lines[2] if len(lines) > 2 else ""
-        stock = int(lines[3]) if len(lines) > 3 and lines[3].isdigit() else None
+        logger.info(f"Creating product with info: {product_info}")
         
-        # Create product
+        # Extract product details using flexible regex patterns
+        # חיפוש שם מוצר - מחפש אחרי מילים כמו "מוצר חדש", "ליצור", "להוסיף" וכו'
+        name_patterns = [
+            r'(?:מוצר חדש|ליצור|להוסיף|חדש|יצירת)\s*:?\s*(.+?)(?=\s*(?:,|\.|ב?מחיר|ב?כמות|עם תיאור|$))',
+            r'(?:שם|בשם)\s*:?\s*(.+?)(?=\s*(?:,|\.|ב?מחיר|ב?כמות|עם תיאור|$))',
+            r'^(.+?)(?=\s*(?:,|\.|ב?מחיר|ב?כמות|עם תיאור|$))'  # fallback - לוקח את המילים הראשונות
+        ]
+        
+        name = None
+        for pattern in name_patterns:
+            name_match = re.search(pattern, product_info, re.MULTILINE)
+            if name_match:
+                name = name_match.group(1).strip()
+                break
+                
+        if not name:
+            logger.error("Could not identify product name")
+            return "לא הצלחתי לזהות את שם המוצר. אנא ציין את שם המוצר בצורה ברורה"
+            
+        # חיפוש מחיר - מחפש מספר שמופיע אחרי מילים שקשורות למחיר
+        price_patterns = [
+            r'(?:ב?מחיר|עולה|שעולה|שמחירו|במחיר של|בסכום של?|בעלות של?)\s*:?\s*(?:₪|ש"ח|שקלים|שקל|ש״ח)?\s*(\d+)(?:\s*(?:₪|ש"ח|שקלים|שקל|ש״ח))?',
+            r'(\d+)\s*(?:₪|ש"ח|שקלים|שקל|ש״ח)',  # fallback - מחפש מספר עם סימן שקל
+        ]
+        
+        price = None
+        for pattern in price_patterns:
+            price_match = re.search(pattern, product_info)
+            if price_match:
+                price = price_match.group(1).strip()
+                break
+                
+        if not price:
+            logger.error("Could not identify product price")
+            return "לא הצלחתי לזהות את מחיר המוצר. אנא ציין את המחיר בצורה ברורה (לדוגמה: מחיר 100 שקלים)"
+            
+        # חיפוש כמות - מחפש מספר שמופיע אחרי מילים שקשורות לכמות
+        stock_patterns = [
+            r'(?:ב?כמות|יחידות|מלאי|להוסיף|כמות של)\s*:?\s*(\d+)(?:\s*(?:יחידות|פריטים|במלאי))?',
+            r'(\d+)\s*(?:יחידות|פריטים|במלאי)'  # fallback - מחפש מספר עם מילת יחידה
+        ]
+        
+        stock = None
+        for pattern in stock_patterns:
+            stock_match = re.search(pattern, product_info)
+            if stock_match:
+                stock = int(stock_match.group(1))
+                break
+                
+        # חיפוש תיאור - מחפש טקסט שמופיע אחרי מילים שקשורות לתיאור
+        description_patterns = [
+            r'(?:תיאור|פירוט|הסבר|מידע)\s*:?\s*(.+?)(?=\s*(?:,|\.|ב?מחיר|ב?כמות|$))',
+            r'עם\s+(.+?)(?=\s*(?:,|\.|ב?מחיר|ב?כמות|$))'
+        ]
+        
+        description = ""
+        for pattern in description_patterns:
+            desc_match = re.search(pattern, product_info)
+            if desc_match:
+                description = desc_match.group(1).strip()
+                break
+        
+        logger.info(f"Parsed product details - Name: {name}, Price: {price}, Description: {description}, Stock: {stock}")
+        
+        # Validate price format
+        try:
+            float(price)
+        except ValueError:
+            logger.error(f"Invalid price format: {price}")
+            return "מחיר לא תקין. יש להזין מספר בלבד"
+        
+        # Create product with basic data
+        logger.info("Attempting to create product with basic data")
         new_product = product_handler.create_product(
             name=name,
             description=description,
-            regular_price=price,
+            regular_price=str(price),
             stock_quantity=stock
         )
         
-        return f"המוצר {new_product['name']} נוצר בהצלחה"
+        if not new_product or 'id' not in new_product:
+            logger.error(f"Product creation failed - Response: {new_product}")
+            return "שגיאה ביצירת המוצר. אנא בדוק את הפרטים ונסה שוב"
         
+        logger.info(f"Product created successfully with ID: {new_product['id']}")
+        return f"המוצר {new_product['name']} נוצר בהצלחה (מזהה: {new_product['id']})"
+        
+    except ValueError as ve:
+        error_msg = f"שגיאה בעיבוד הנתונים: {str(ve)}"
+        logger.error(f"Value error in product creation: {ve}")
+        return error_msg
     except Exception as e:
-        logger.error(f"Error creating product: {e}")
-        return f"שגיאה ביצירת המוצר: {str(e)}"
+        error_msg = f"שגיאה ביצירת המוצר: {str(e)}"
+        logger.error(f"Error creating product: {e}", exc_info=True)
+        return error_msg
 
 def edit_product(product_info: str) -> str:
     """Edit an existing product in WordPress"""
@@ -2019,53 +2100,128 @@ async def handle_product_choice(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(f"שגיאה בטיפול בבחירת המוצר: {str(e)}")
         return ConversationHandler.END
 
-def main() -> None:
-    """Start the bot."""
+async def test_woocommerce_connection() -> None:
+    """בדיקת חיבור ל-WooCommerce ויצירת מוצר דמו"""
+    logger.info("=== בודק חיבור ל-WooCommerce ===")
+    
     try:
-        # Create the Application and pass it your bot's token.
-        application = Application.builder().token(config['TELEGRAM_BOT_TOKEN']).build()
+        # בדיקת חיבור בסיסי
+        logger.info("בודק חיבור בסיסי...")
+        test_response = product_handler.wcapi.get("")
+        logger.info(f"תגובת בדיקת חיבור בסיסית: {test_response.status_code}")
+        logger.debug(f"תוכן תגובה: {test_response.text}")
+        
+        if test_response.status_code != 200:
+            raise Exception(f"שגיאה בחיבור בסיסי. קוד תגובה: {test_response.status_code}")
+        
+        # בדיקת הרשאות
+        logger.info("=== בודק הרשאות API ===")
+        logger.info(f"משתמש ב-URL: {config['WP_URL']}")
+        logger.info(f"משתמש ב-Consumer Key: {os.getenv('WC_CONSUMER_KEY')}")
+        logger.info(f"משתמש ב-Consumer Secret: {os.getenv('WC_CONSUMER_SECRET')}")
+        
+        # בדיקת גישה לרשימת מוצרים
+        logger.info("בודק גישה לרשימת מוצרים...")
+        products_response = product_handler.wcapi.get("products")
+        logger.info(f"תגובת בדיקת גישה למוצרים: {products_response.status_code}")
+        
+        if products_response.status_code != 200:
+            raise Exception(f"שגיאה בגישה לרשימת מוצרים. קוד תגובה: {products_response.status_code}")
+        
+        # ניסיון יצירת מוצר דמו
+        logger.info("=== מנסה ליצור מוצר דמו ===")
+        test_product = {
+            "name": "מוצר בדיקה",
+            "type": "simple",
+            "regular_price": "99.99",
+            "description": "מוצר זה נוצר אוטומטית לבדיקת המערכת",
+            "short_description": "מוצר בדיקה",
+            "manage_stock": True,
+            "stock_quantity": 100,
+            "status": "draft"  # יצירה כטיוטה
+        }
+        
+        logger.info(f"נתוני מוצר הדמו: {test_product}")
+        response = product_handler.wcapi.post("products", test_product)
+        logger.info(f"קוד תגובה ליצירת מוצר: {response.status_code}")
+        logger.debug(f"תוכן תגובת יצירת מוצר: {response.text}")
+        
+        if response.status_code == 201:
+            logger.info("✅ מוצר הדמו נוצר בהצלחה")
+            product_data = response.json()
+            product_id = product_data['id']
+            logger.info(f"מזהה מוצר: {product_id}")
+            
+            # בדיקת קריאת פרטי המוצר
+            logger.info("בודק אפשרות לקרוא את פרטי המוצר...")
+            get_response = product_handler.wcapi.get(f"products/{product_id}")
+            if get_response.status_code != 200:
+                logger.warning(f"⚠️ לא הצלחתי לקרוא את פרטי המוצר. קוד תגובה: {get_response.status_code}")
+            
+            # מחיקת מוצר הדמו
+            logger.info("מנסה למחוק את מוצר הדמו...")
+            delete_response = product_handler.wcapi.delete(f"products/{product_id}", params={"force": True})
+            logger.info(f"קוד תגובה למחיקת מוצר: {delete_response.status_code}")
+            
+            if delete_response.status_code == 200:
+                logger.info("✅ מוצר הדמו נמחק בהצלחה")
+            else:
+                logger.warning(f"⚠️ לא הצלחתי למחוק את מוצר הדמו. קוד תגובה: {delete_response.status_code}")
+        else:
+            error_msg = f"❌ שגיאה ביצירת מוצר דמו: {response.text}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+            
+        logger.info("=== בדיקת החיבור הושלמה בהצלחה ===")
+            
+    except Exception as e:
+        error_msg = f"❌ שגיאה בבדיקת החיבור: {str(e)}"
+        logger.error(error_msg)
+        raise Exception(error_msg)
+
+def main() -> None:
+    """הפונקציה הראשית להרצת הבוט"""
+    try:
+        logger.info("=== Starting main function ===")
         
         # Initialize handlers
-        global media_handler, coupon_handler, order_handler, category_handler, customer_handler, inventory_handler
+        logger.info("Initializing handlers...")
+        init_handlers()
         
-        media_handler = MediaHandler(config['WP_URL'], config['WP_USER'], config['WP_PASSWORD'])
-        coupon_handler = CouponHandler(config['WP_URL'])
-        order_handler = OrderHandler(config['WP_URL'])
-        category_handler = CategoryHandler(config['WP_URL'])
-        customer_handler = CustomerHandler(config['WP_URL'])
-        inventory_handler = InventoryHandler(config['WP_URL'])
-        product_handler = ProductHandler(config['WP_URL'])
-        settings_handler = SettingsHandler(config['WP_URL'])
+        # Create the Application
+        logger.info("Creating Telegram application...")
+        application = Application.builder().token(os.getenv('TELEGRAM_BOT_TOKEN')).build()
         
-        bot_logger.info("All handlers initialized successfully")
-        
-        # Add conversation handler
-        conv_handler = ConversationHandler(
-            entry_points=[
-                CommandHandler("start", start),
-                MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
-            ],
-            states={
-                CHOOSING_PRODUCT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_product_choice)
-                ],
-            },
-            fallbacks=[],
-        )
-        
-        application.add_handler(conv_handler)
+        # Add handlers
+        logger.info("Adding message handlers...")
+        application.add_handler(CommandHandler('start', start))
+        application.add_handler(CommandHandler('test_image', test_image_upload))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         # Add error handler
+        logger.info("Adding error handler...")
         application.add_error_handler(error_handler)
         
-        # Start the Bot
-        bot_logger.info("Starting bot...")
-        application.run_polling()
+        # Test WooCommerce connection
+        logger.info("Testing WooCommerce connection...")
+        asyncio.run(test_woocommerce_connection())
         
+        # Start the Bot
+        logger.info("=== Starting bot polling ===")
+        
+        # Set up Windows specific event loop policy
+        if os.name == 'nt':
+            logger.info("Setting up Windows event loop policy...")
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        
+        # Run the bot
+        logger.info("Running bot polling...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+            
     except Exception as e:
-        error_logger.error(f"Critical error in main: {str(e)}", exc_info=True)
+        logger.error(f"Critical error in main: {str(e)}", exc_info=True)
         raise
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
